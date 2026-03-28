@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Vault — Level 0: The Foundry</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --accent: #00aaff;
+      --ui-white: rgba(255, 255, 255, 0.9);
+      --bg-dark: rgba(0, 0, 0, 0.7);
+      --rage-red: #ff4444;
+    }
+    body { margin: 0; overflow: hidden; background: #050505; font-family: 'Press Start 2P', monospace; }
+    canvas { display: block; }
+
+    /* HUD ELEMENTS */
+    #ui-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #instruction-box {
+      position: absolute;
+      top: 20%;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      color: white;
+      font-size: 12px;
+      text-shadow: 2px 2px 0px black;
+      max-width: 600px;
+      line-height: 1.6;
+    }
+
+    #staminaContainer {
+      position: fixed;
+      bottom: 40px;
+      left: 40px;
+      width: 250px;
+      height: 12px;
+      background: var(--bg-dark);
+      border: 3px solid var(--ui-white);
+      padding: 2px;
+    }
+    #staminaBar { width: 100%; height: 100%; background: var(--accent); transition: width 0.1s linear; }
+
+    #crosshair {
+      position: fixed; top: 50%; left: 50%; width: 6px; height: 6px;
+      background: var(--accent); border-radius: 50%; transform: translate(-50%, -50%);
+      box-shadow: 0 0 10px var(--accent);
+    }
+
+    /* MOTION LINES */
+    #motionLines {
+      position: fixed; inset: 0; pointer-events: none;
+      background: radial-gradient(circle, transparent 30%, rgba(255,255,255,0.1) 100%);
+      opacity: 0; transition: opacity 0.2s;
+    }
+    .active-fx { opacity: 1 !important; }
+
+    /* FINAL RESULTS SCREEN */
+    #results-screen {
+      position: fixed; inset: 0; background: var(--bg-dark);
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      color: white; gap: 20px; text-align: center;
+    }
+    .rating-text { font-size: 32px; color: var(--accent); margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<div id="ui-layer">
+  <div id="crosshair"></div>
+  <div id="instruction-box">LEVEL 0: THE FOUNDRY<br><span style="font-size: 8px; opacity: 0.7;">REACH THE EXTRACTION HELIPAD</span></div>
+  
+  <div id="staminaContainer">
+    <div id="staminaBar"></div>
+  </div>
+
+  <div id="motionLines"></div>
+</div>
+
+<div id="results-screen">
+  <h1>EXTRACTION COMPLETE</h1>
+  <div id="stats">
+    <p>TIME: <span id="res-time">00.0</span>s</p>
+    <p>MOMENTUM KEPT: <span id="res-flow">0</span>%</p>
+  </div>
+  <div class="rating-text" id="res-rating">VAULTER</div>
+  <button onclick="location.reload()" style="padding: 15px; background: var(--accent); border: none; font-family: inherit; cursor: pointer; color: white; margin-top: 20px;">REPLAY</button>
+</div>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+// --- ENGINE INIT ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050505);
+scene.fog = new THREE.FogExp2(0x050505, 0.012);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1500);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// --- LIGHTING ---
+const ambient = new THREE.AmbientLight(0xffffff, 0.3);
+scene.add(ambient);
+const directional = new THREE.DirectionalLight(0x00aaff, 1.2);
+directional.position.set(10, 50, 10);
+directional.castShadow = true;
+scene.add(directional);
+
+// --- ARMS ---
+const armMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.2, metalness: 0.8 });
+const armGeo = new THREE.BoxGeometry(0.1, 0.1, 0.6);
+const leftArm = new THREE.Mesh(armGeo, armMat);
+const rightArm = new THREE.Mesh(armGeo, armMat);
+leftArm.position.set(-0.3, -0.2, -0.4);
+rightArm.position.set(0.3, -0.2, -0.4);
+camera.add(leftArm, rightArm);
+scene.add(camera);
+
+// --- PHYSICS CONSTANTS ---
+const GRAVITY = 35;
+const BASE_FRICTION = 10.0;
+const SLOPE_FRICTION = 4.0;
+const PLAYER_HEIGHT = 2.0;
+
+// --- LEVEL ASSETS & MATERIALS ---
+const matConcrete = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+const matNeon = new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x00aaff, emissiveIntensity: 2 });
+const matSlope = new THREE.MeshStandardMaterial({ color: 0xccaa00 }); // Yellow caution
+const collidables = [];
+const wallRunners = [];
+const deathZoneY = -20;
+
+function createBox(w, h, d, x, y, z, mat, rotX=0, isWallRun=false) {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    mesh.rotation.x = rotX;
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    scene.add(mesh);
+    collidables.push(mesh);
+    if(isWallRun) wallRunners.push(mesh);
+    return mesh;
+}
+
+// --- WORLD GENERATION: THE FOUNDRY ---
+// Section 1: Ground Control
+createBox(10, 2, 50, 0, 0, 0, matConcrete); // Start floor
+createBox(10, 2, 50, 0, -2, -60, matConcrete); // After gap
+// Obstacle 2: The Vent
+createBox(10, 1, 1, 0, 2.8, -75, matConcrete); // Low pipe
+
+// Section 2: Verticality
+createBox(20, 2, 20, 0, -2, -100, matConcrete); 
+createBox(20, 10, 2, 0, 3, -110, matConcrete); // The Wall
+createBox(20, 2, 30, 0, 8, -135, matConcrete); // High Ledge floor
+
+// Section 3: Wall Run (The Gap of No Return)
+createBox(2, 15, 60, 10, 8, -190, matNeon, 0, true); // Right Wall Run
+createBox(2, 15, 60, -10, 18, -250, matNeon, 0, true); // Left Wall Run (Switch)
+createBox(20, 2, 20, 0, 15, -290, matConcrete);
+
+// Section 4: Momentum Transfer
+createBox(10, 2, 60, 0, 10, -340, matSlope, 0.15); // Slope
+createBox(20, 2, 40, 0, -5, -450, matConcrete); // Far landing
+
+// Section 5: The Helipad
+const helipad = createBox(15, 2, 15, 0, -5, -550, matNeon);
+
+// --- PLAYER STATE ---
+let velocity = new THREE.Vector3();
+let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+let isSprinting = false, isSliding = false, canJump = false, isWallRunning = false;
+let stamina = 100;
+let flowTime = 0, startTime = Date.now();
+let gameActive = true;
+
+const controls = new PointerLockControls(camera, document.body);
+document.addEventListener('mousedown', () => gameActive && controls.lock());
+
+// --- INPUT LOGIC ---
+const onKeyDown = (e) => {
+    if(!gameActive) return;
+    switch (e.code) {
+        case 'KeyW': moveForward = true; break;
+        case 'KeyS': moveBackward = true; break;
+        case 'KeyA': moveLeft = true; break;
+        case 'KeyD': moveRight = true; break;
+        case 'ShiftLeft': isSprinting = true; break;
+        case 'Space': handleJump(); break;
+        case 'KeyQ': performDash(); break;
+        case 'ControlLeft': startSlide(); break;
+        case 'KeyV': velocity.set(0, velocity.y, 0); break;
+    }
+};
+
+const onKeyUp = (e) => {
+    switch (e.code) {
+        case 'KeyW': moveForward = false; break;
+        case 'KeyS': moveBackward = false; break;
+        case 'KeyA': moveLeft = false; break;
+        case 'KeyD': moveRight = false; break;
+        case 'ShiftLeft': isSprinting = false; break;
+    }
+};
+
+document.addEventListener('keydown', onKeyDown);
+document.addEventListener('keyup', onKeyUp);
+
+function startSlide() {
+    if (!isSliding && velocity.length() > 5) {
+        isSliding = true;
+        camera.position.y -= 1.2;
+        triggerMotionLines(600);
+        setTimeout(() => {
+            isSliding = false;
+            camera.position.y += 1.2;
+        }, 600);
+    }
+}
+
+function handleJump() {
+    if (canJump) {
+        // Momentum Transfer logic: Jump during slide gives huge boost
+        const boost = isSliding ? 1.8 : 1.0;
+        velocity.y += 15;
+        velocity.z *= boost;
+        canJump = false;
+    }
+}
+
+function performDash() {
+    if (stamina >= 30) {
+        const dashDir = new THREE.Vector3();
+        camera.getWorldDirection(dashDir);
+        dashDir.y = 0;
+        velocity.add(dashDir.normalize().multiplyScalar(45));
+        stamina -= 30;
+        triggerMotionLines(250);
+    }
+}
+
+function triggerMotionLines(dur) {
+    const ml = document.getElementById('motionLines');
+    ml.classList.add('active-fx');
+    setTimeout(() => ml.classList.remove('active-fx'), dur);
+}
+
+// --- CORE LOOPS ---
+const raycaster = new THREE.Raycaster();
+let prevTime = performance.now();
+
+function animate() {
+    requestAnimationFrame(animate);
+    if (!gameActive) return;
+
+    const time = performance.now();
+    const delta = (time - prevTime) / 1000;
+    const playerPos = controls.getObject().position;
+
+    if (controls.isLocked) {
+        // Tutorial Instructions logic
+        const z = playerPos.z;
+        const info = document.getElementById('instruction-box');
+        if (z > -40) info.innerHTML = "TAP SPACE TO JUMP";
+        else if (z > -70) info.innerHTML = "HOLD LEFT CTRL TO SLIDE UNDER THE VENT";
+        else if (z > -100) info.innerHTML = "JUMP TOWARD THE LEDGE TO CLIMB";
+        else if (z > -150) info.innerHTML = "HOLD SPACE AGAINST GLOWING WALLS TO RUN";
+        else if (z > -300) info.innerHTML = "SLIDE + JUMP FOR MAXIMUM MOMENTUM";
+        else info.innerHTML = "REACH THE HELIPAD";
+
+        // Stamina
+        stamina = Math.min(100, stamina + (isSprinting ? -25 : 15) * delta);
+        document.getElementById('staminaBar').style.width = stamina + "%";
+
+        // Raycasting for Floor/Walls
+        raycaster.set(playerPos, new THREE.Vector3(0, -1, 0));
+        const intersects = raycaster.intersectObjects(collidables);
+        const onObject = intersects.length > 0 && intersects[0].distance < PLAYER_HEIGHT + 0.1;
+
+        // Friction Logic (Lower on Slopes)
+        const currentFriction = (onObject && intersects[0].object.material === matSlope) ? SLOPE_FRICTION : BASE_FRICTION;
+        velocity.x -= velocity.x * currentFriction * delta;
+        velocity.z -= velocity.z * currentFriction * delta;
+
+        // Gravity & Wall Run
+        const lookDir = new THREE.Vector3(); camera.getWorldDirection(lookDir);
+        const sideRay = new THREE.Vector3().crossVectors(camera.up, lookDir).normalize();
+        raycaster.set(playerPos, sideRay);
+        const nearWall = raycaster.intersectObjects(wallRunners).length > 0 && raycaster.far < 3;
+        
+        isWallRunning = !onObject && nearWall && moveForward;
+
+        if (isWallRunning) {
+            velocity.y = 0;
+            velocity.z -= lookDir.z * 100 * delta;
+        } else {
+            velocity.y -= GRAVITY * delta;
+        }
+
+        // Movement
+        const direction = new THREE.Vector3(Number(moveRight) - Number(moveLeft), 0, Number(moveForward) - Number(moveBackward)).normalize();
+        const speed = (isSprinting && stamina > 0) ? 170 : (isSliding ? 200 : 90);
+        
+        if (moveForward || moveBackward) velocity.z -= direction.z * speed * delta;
+        if (moveLeft || moveRight) velocity.x -= direction.x * speed * delta;
+
+        controls.moveRight(-velocity.x * delta);
+        controls.moveForward(-velocity.z * delta);
+        playerPos.y += velocity.y * delta;
+
+        // Floor Collision
+        if (onObject && velocity.y < 0) {
+            velocity.y = 0;
+            canJump = true;
+            // Tuck Roll (Hard landing check)
+            if (velocity.y < -15 && !isSliding) {
+                velocity.z *= 0.5; // Stagger
+            }
+        }
+
+        // Death/Respawn
+        if (playerPos.y < deathZoneY) {
+            playerPos.set(0, 5, 0);
+            velocity.set(0, 0, 0);
+        }
+
+        // Win Condition
+        if (playerPos.distanceTo(helipad.position) < 10) {
+            endGame();
+        }
+
+        // Flow Calculation
+        if (velocity.length() > 15) flowTime += delta;
+
+        // Arm Bob
+        if(velocity.length() > 0.5 && canJump) {
+            const swingX = Math.sin(time * 0.01) * 0.05;
+            leftArm.position.y = -0.2 + swingX;
+            rightArm.position.y = -0.2 - swingX;
+        }
+    }
+
+    renderer.render(scene, camera);
+    prevTime = time;
+}
+
+function endGame() {
+    gameActive = false;
+    controls.unlock();
+    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    const flowPerc = Math.min(100, Math.floor((flowTime / totalTime) * 100));
+    
+    document.getElementById('results-screen').style.display = 'flex';
+    document.getElementById('res-time').innerText = totalTime;
+    document.getElementById('res-flow').innerText = flowPerc;
+    
+    let rank = "INITIATE";
+    if(flowPerc > 60) rank = "TRACEUR";
+    if(flowPerc > 85) rank = "VAULTER";
+    document.getElementById('res-rating').innerText = rank;
+}
+
+animate();
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
