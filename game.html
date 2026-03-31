@@ -6,6 +6,7 @@
     <title>Vault</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; padding: 0; background: #050505; overflow: hidden; }
         canvas { display: block; image-rendering: pixelated; }
@@ -39,20 +40,28 @@
             right: 20px;
             top: 50%;
             transform: translateY(-50%);
-            width: 220px;
-            background: rgba(0,0,0,0.35);
+            width: 260px;
+            background: rgba(0,0,0,0.55);
             color: #fff;
-            padding: 8px;
-            border-radius: 8px;
-            font-family: 'Montserrat', sans-serif;
-            font-size: 13px;
+            padding: 10px;
+            border-radius: 6px;
+            font-family: 'Press Start 2P', monospace;
+            font-size: 12px;
+            letter-spacing: 0.8px;
+            -webkit-font-smoothing: none;
+            -moz-osx-font-smoothing: grayscale;
+            image-rendering: pixelated;
             z-index: 12;
+            border: 3px solid #9aa0a6; /* visible border */
+            box-shadow: inset 0 0 0 2px rgba(0,0,0,0.6);
         }
         #controls .ctrl { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-        #controls .label { flex: 1; font-weight: 600; }
-        #controls .keys { font-size: 11px; color: #ddd; margin-top: 2px; }
-        #controls .cd { width: 90px; height: 8px; background: rgba(255,255,255,0.06); border-radius: 6px; overflow: hidden; margin-left: 8px; }
-        #controls .cd-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#ffcc00,#ff007f); transition: width 0.1s linear; }
+        #controls .label { flex: 1; font-weight: 700; text-transform: uppercase; font-size: 11px; }
+        #controls .keys { font-size: 11px; color: #111; margin-top: 2px; font-family: 'Press Start 2P', monospace; display: inline-flex; align-items: center; gap: 8px; background: #bfbfbf; padding: 4px 8px; border-radius: 4px; color: #0a0a0a; }
+        #controls .cd-number { min-width: 26px; text-align: center; background: rgba(10,10,10,0.9); color: #fff; padding: 2px 4px; border-radius: 3px; font-size: 10px; }
+        /* keep old classes if present but unused */
+        #controls .cd { display: none; }
+        #controls .cd-fill { display: none; }
     </style>
 </head>
 <body>
@@ -115,15 +124,27 @@ function syncBody(sprite) {
 }
 
 // Ability / state flags and cooldowns
-let isGliding = false, isSwinging = false, swingAnchor = null, swingLine = null, swingLength = 0, isSpinning = false;
-let sparkEmitter;
+let isGliding = false, isSpinning = false;
+let lastLandedAt = 0, landRollWindow = 320;
+let isGrinding = false, rails = [], currentRail = null, grindT = 0, grindDir = { x: 0, y: 0 }, grindSpeed = 0;
 const abilityCooldowns = {
-    power: { last: 0, duration: 3000 },
-    tether: { last: 0, duration: 1200 },
     spiral: { last: 0, duration: 1000 },
     glide: { last: 0, duration: 0 }
 };
-let controlsUI, cdPower, cdTether, cdSpiral, cdGlide;
+let controlsUI, cdSpiral, cdGlide;
+
+// Helper: closest point on a line segment
+function pointLineClosest(line, px, py) {
+    const x1 = line.x1, y1 = line.y1, x2 = line.x2, y2 = line.y2;
+    const vx = x2 - x1, vy = y2 - y1;
+    const wx = px - x1, wy = py - y1;
+    const len2 = vx * vx + vy * vy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, (vx * wx + vy * wy) / len2));
+    const cx = x1 + vx * t;
+    const cy = y1 + vy * t;
+    const dist = Math.hypot(px - cx, py - cy);
+    return { t, dist };
+}
 
 function preload() {
     // CREATE HUMANOID DUMMY TEXTURE
@@ -204,13 +225,21 @@ function create() {
     window.addEventListener('keydown', resumeAudio);
 
     // WORLD STUFF
-    const platforms = this.physics.add.staticGroup();
+    platforms = this.physics.add.staticGroup();
     // Floor (thickness tuned to reduce tunneling but not too tall)
     const floorThickness = 40;
     platforms.add(this.add.rectangle(width/2, height - Math.round(floorThickness / 2), width, floorThickness, 0x111111));
     // Ledges for testing grab
     platforms.add(this.add.rectangle(width - 200, height - 300, 400, 20, 0x333333));
     platforms.add(this.add.rectangle(200, height - 500, 400, 20, 0x333333));
+    // Rails for grinding (visuals + data)
+    rails = [
+        { x1: width/2 - 240, y1: height - 240, x2: width/2 + 240, y2: height - 320 },
+        { x1: width/2 + 300, y1: height - 300, x2: width/2 + 540, y2: height - 220 }
+    ];
+    const railG = this.add.graphics();
+    railG.lineStyle(6, 0x66ccff, 1);
+    rails.forEach(r => railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2)));
 
     // AMBIENT WIND
     windEmitter = this.add.particles(0, 0, 'pixel', {
@@ -244,32 +273,24 @@ function create() {
         emitting: false
     });
 
-    // SPARK EMITTER for power-slide sparks
-    sparkEmitter = this.add.particles(0, 0, 'pixel', {
-        speed: { min: 220, max: 600 },
-        angle: { min: 200, max: 340 },
-        scale: { start: 1.6, end: 0.4 },
-        alpha: { start: 1, end: 0 },
-        gravityY: 2000,
-        lifespan: 450,
-        frequency: -1,
-        blendMode: 'ADD'
-    });
+    
 
     // Controls UI (cooldowns shown middle-right)
     controlsUI = document.createElement('div');
     controlsUI.id = 'controls';
     controlsUI.innerHTML = `
-        <div class="ctrl"><div><div class="label">Power-Slide</div><div class="keys">SHIFT+CTRL+S</div></div><div class="cd"><div id="cd-power" class="cd-fill"></div></div></div>
-        <div class="ctrl"><div><div class="label">Tether-Swing</div><div class="keys">Click Anchor</div></div><div class="cd"><div id="cd-tether" class="cd-fill"></div></div></div>
-        <div class="ctrl"><div><div class="label">Spiral Jump</div><div class="keys">A/D + SPACE</div></div><div class="cd"><div id="cd-spiral" class="cd-fill"></div></div></div>
-        <div class="ctrl"><div><div class="label">Glide</div><div class="keys">Hold SHIFT</div></div><div class="cd"><div id="cd-glide" class="cd-fill"></div></div></div>
+        <div class="ctrl"><div><div class="label">Move</div><div class="keys">A / D <span id="cdnum-move" class="cd-number"></span></div></div></div>
+        <div class="ctrl"><div><div class="label">Jump</div><div class="keys">SPACE <span id="cdnum-jump" class="cd-number"></span></div></div></div>
+        <div class="ctrl"><div><div class="label">Crouch / Down</div><div class="keys">S <span id="cdnum-crouch" class="cd-number"></span></div></div></div>
+        <div class="ctrl"><div><div class="label">Slide / Dive</div><div class="keys">CTRL <span id="cdnum-slide" class="cd-number"></span></div></div></div>
+        <div class="ctrl"><div><div class="label">Sprint</div><div class="keys">Hold SHIFT + A/D <span id="cdnum-sprint" class="cd-number"></span></div></div></div>
+        <div class="ctrl"><div><div class="label">Dash-Cancel</div><div class="keys">SPACE during slide <span id="cdnum-dash" class="cd-number"></span></div></div></div>
+        <div class="ctrl"><div><div class="label">Spiral Jump</div><div class="keys">A/D + SPACE <span id="cdnum-spiral" class="cd-number"></span></div></div></div>
+        <div class="ctrl"><div><div class="label">Glide</div><div class="keys">Hold SHIFT <span id="cdnum-glide" class="cd-number"></span></div></div></div>
     `;
     document.body.appendChild(controlsUI);
-    cdPower = document.getElementById('cd-power');
-    cdTether = document.getElementById('cd-tether');
-    cdSpiral = document.getElementById('cd-spiral');
-    cdGlide = document.getElementById('cd-glide');
+    cdSpiral = document.getElementById('cdnum-spiral');
+    cdGlide = document.getElementById('cdnum-glide');
 
     // PLAYER SETUP
     player = this.physics.add.sprite(width/2, height - 100, 'humanoid');
@@ -302,6 +323,8 @@ function create() {
         }
 
         if (p.body.wasTouching.none && p.body.touching.down) {
+            // register landing time for roll detection
+            lastLandedAt = performance.now();
             landEmitter.emitParticleAt(p.x, p.y + 24, 12);
             // Land Squash (keep body in sync while tweening)
             this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true,
@@ -385,6 +408,59 @@ function update() {
     const maxVertical = isGliding ? 500 : 1200;
     player.setMaxVelocity(targetSpeed, maxVertical);
 
+    // --- RAIL GRIND: start or update grinding along rails ---
+    if (!isGrinding) {
+        // try to start a grind when near a rail and moving fast
+        if (Math.abs(player.body.velocity.x) > 280 && rails && rails.length) {
+            for (let r of rails) {
+                const res = pointLineClosest(r, player.x, player.y);
+                if (res.dist < 14) {
+                    isGrinding = true;
+                    currentRail = r;
+                    grindT = res.t;
+                    const vx = r.x2 - r.x1, vy = r.y2 - r.y1;
+                    const len = Math.sqrt(vx * vx + vy * vy) || 1;
+                    grindDir.x = vx / len; grindDir.y = vy / len;
+                    grindSpeed = Math.max(360, Math.abs(player.body.velocity.x));
+                    player.body.allowGravity = false;
+                    player.body.setVelocity(0, 0);
+                    syncBody(player);
+                    break;
+                }
+            }
+        }
+    } else {
+        // progress along the rail
+        const dt = this.game.loop.delta / 1000;
+        const vx = currentRail.x2 - currentRail.x1, vy = currentRail.y2 - currentRail.y1;
+        const railLen = Math.sqrt(vx * vx + vy * vy) || 1;
+        grindT += (grindSpeed * dt) / railLen;
+        if (grindT >= 1 || grindT <= 0) {
+            // exit rail at end
+            isGrinding = false;
+            player.body.allowGravity = true;
+            player.setVelocityX(grindDir.x * grindSpeed);
+            player.setVelocityY(-480);
+            syncBody(player);
+        } else {
+            const x = currentRail.x1 + vx * grindT;
+            const y = currentRail.y1 + vy * grindT;
+            player.setPosition(x, y);
+            syncBody(player);
+            // accelerate slightly while grinding
+            grindSpeed = Math.min(1400, grindSpeed + 160 * dt);
+            // trick: press SPACE to jump off with a boost
+            if (Phaser.Input.Keyboard.JustDown(keys.SPACE)) {
+                isGrinding = false;
+                player.body.allowGravity = true;
+                player.setVelocityX(grindDir.x * (grindSpeed + 300));
+                player.setVelocityY(-700);
+                syncBody(player);
+                playRollSfx();
+            }
+        }
+    }
+
     // --- Spiral Jump (A/D + SPACE during wall-run) ---
     if ((player.body.blocked.left || player.body.blocked.right) && !isGrounded && (keys.A.isDown || keys.D.isDown) && Phaser.Input.Keyboard.JustDown(keys.SPACE) && (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration)) {
         abilityCooldowns.spiral.last = performance.now();
@@ -412,22 +488,9 @@ function update() {
         }
     }
 
-    // --- SLIDE (GROUND), POWER-SLIDE, and DIVE (AIR) ---
+    // --- SLIDE (GROUND) and DIVE (AIR) ---
     if (Phaser.Input.Keyboard.JustDown(keys.CTRL) && !isSliding && !isDiving && !isRolling && stamina > 10) {
-        const now = performance.now();
-        // Power-Slide: SHIFT + CTRL + S (sharp brake, sparks)
-        if (keys.SHIFT.isDown && keys.S.isDown && isGrounded && (now - abilityCooldowns.power.last >= abilityCooldowns.power.duration)) {
-            abilityCooldowns.power.last = now;
-            isSliding = true;
-            stamina = Math.max(0, stamina - 30);
-            sparkEmitter.emitParticleAt(player.x, player.y + 12, 36);
-            player.setVelocityX(0);
-            player.setAccelerationX(0);
-            player.setDragX(800);
-            this.tweens.add({ targets: player, scaleY: 0.6, scaleX: 1.2, duration: 120, yoyo: true, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
-            this.time.delayedCall(380, () => { isSliding = false; player.setDragX(0.01); syncBody(player); });
-            playBlip(120, 0.08, 'square', 0.2);
-        } else if (isGrounded) {
+        if (isGrounded) {
             // Ground slide / dash
             isSliding = true;
             stamina -= 20;
@@ -493,26 +556,7 @@ function update() {
         trailEmitter.emitParticleAt(player.x, player.y);
     }
 
-    // --- TETHER-SWING (while holding mouse) ---
-    if (isSwinging && swingAnchor && swingLine) {
-        // approximate circular constraint and add tangential acceleration for "swing" feel
-        const dx = player.x - swingAnchor.x;
-        const dy = player.y - swingAnchor.y;
-        const len = Math.max(10, Math.sqrt(dx * dx + dy * dy));
-        const nx = dx / len, ny = dy / len;
-        const tangentX = -ny, tangentY = nx;
-        // small pull to keep to radius
-        const spring = (len - swingLength) * 0.2;
-        player.x -= nx * spring;
-        player.y -= ny * spring;
-        syncBody(player);
-        // add tangential velocity for centrifugal speed gains
-        const swingAccel = 18;
-        player.setVelocityX(player.body.velocity.x + tangentX * swingAccel);
-        player.setVelocityY(player.body.velocity.y + tangentY * swingAccel);
-        // update tether visual
-        swingLine.setTo(swingAnchor.x, swingAnchor.y, player.x, player.y);
-    }
+    
 
     // --- SPEED LINES + SFX TRIGGER ---
     const speed = Math.abs(player.body.velocity.x);
@@ -524,13 +568,11 @@ function update() {
     const now = performance.now();
     function setCd(el, last, dur) {
         if (!el) return;
-        if (!dur || dur <= 0) { el.style.width = '0%'; return; }
-        const t = Math.max(0, dur - (now - last));
-        const pct = (t / dur) * 100;
-        el.style.width = pct + '%';
+        if (!dur || dur <= 0) { el.innerText = ''; return; }
+        const remaining = Math.max(0, dur - (now - last));
+        el.innerText = remaining > 0 ? Math.ceil(remaining / 1000) : '0';
     }
-    setCd(cdPower, abilityCooldowns.power.last, abilityCooldowns.power.duration);
-    setCd(cdTether, abilityCooldowns.tether.last, abilityCooldowns.tether.duration);
+    // update numeric cooldown displays (empty when not applicable)
     setCd(cdSpiral, abilityCooldowns.spiral.last, abilityCooldowns.spiral.duration);
     setCd(cdGlide, abilityCooldowns.glide.last, abilityCooldowns.glide.duration);
 
