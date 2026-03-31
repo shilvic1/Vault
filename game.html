@@ -1,392 +1,564 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Vault — Level 0: The Foundry</title>
-  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --accent: #00aaff;
-      --ui-white: rgba(255, 255, 255, 0.9);
-      --bg-dark: rgba(0, 0, 0, 0.7);
-      --rage-red: #ff4444;
-    }
-    body { margin: 0; overflow: hidden; background: #050505; font-family: 'Press Start 2P', monospace; }
-    canvas { display: block; }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vault</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; background: #050505; overflow: hidden; }
+        canvas { display: block; image-rendering: pixelated; }
+        
+        #ui-layer {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            z-index: 10;
+        }
 
-    /* HUD ELEMENTS */
-    #ui-layer {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 10;
-    }
+        .stamina-bar-container {
+            width: 200px;
+            height: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            overflow: hidden;
+        }
 
-    #instruction-box {
-      position: absolute;
-      top: 20%;
-      left: 50%;
-      transform: translateX(-50%);
-      text-align: center;
-      color: white;
-      font-size: 12px;
-      text-shadow: 2px 2px 0px black;
-      max-width: 600px;
-      line-height: 1.6;
-    }
+        #stamina-fill {
+            width: 100%;
+            height: 100%;
+            background: #00ff88;
+            transform-origin: left;
+            transition: background-color 0.3s ease;
+        }
 
-    #staminaContainer {
-      position: fixed;
-      bottom: 40px;
-      left: 40px;
-      width: 250px;
-      height: 12px;
-      background: var(--bg-dark);
-      border: 3px solid var(--ui-white);
-      padding: 2px;
-    }
-    #staminaBar { width: 100%; height: 100%; background: var(--accent); transition: width 0.1s linear; }
-
-    #crosshair {
-      position: fixed; top: 50%; left: 50%; width: 6px; height: 6px;
-      background: var(--accent); border-radius: 50%; transform: translate(-50%, -50%);
-      box-shadow: 0 0 10px var(--accent);
-    }
-
-    /* MOTION LINES */
-    #motionLines {
-      position: fixed; inset: 0; pointer-events: none;
-      background: radial-gradient(circle, transparent 30%, rgba(255,255,255,0.1) 100%);
-      opacity: 0; transition: opacity 0.2s;
-    }
-    .active-fx { opacity: 1 !important; }
-
-    /* FINAL RESULTS SCREEN */
-    #results-screen {
-      position: fixed; inset: 0; background: var(--bg-dark);
-      display: none; flex-direction: column; align-items: center; justify-content: center;
-      color: white; gap: 20px; text-align: center;
-    }
-    .rating-text { font-size: 32px; color: var(--accent); margin-top: 10px; }
-  </style>
+        /* Controls UI (middle-right) */
+        #controls {
+            position: absolute;
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 220px;
+            background: rgba(0,0,0,0.35);
+            color: #fff;
+            padding: 8px;
+            border-radius: 8px;
+            font-family: 'Montserrat', sans-serif;
+            font-size: 13px;
+            z-index: 12;
+        }
+        #controls .ctrl { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        #controls .label { flex: 1; font-weight: 600; }
+        #controls .keys { font-size: 11px; color: #ddd; margin-top: 2px; }
+        #controls .cd { width: 90px; height: 8px; background: rgba(255,255,255,0.06); border-radius: 6px; overflow: hidden; margin-left: 8px; }
+        #controls .cd-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#ffcc00,#ff007f); transition: width 0.1s linear; }
+    </style>
 </head>
 <body>
 
 <div id="ui-layer">
-  <div id="crosshair"></div>
-  <div id="instruction-box">LEVEL 0: THE FOUNDRY<br><span style="font-size: 8px; opacity: 0.7;">REACH THE EXTRACTION HELIPAD</span></div>
-  
-  <div id="staminaContainer">
-    <div id="staminaBar"></div>
-  </div>
-
-  <div id="motionLines"></div>
+    <div class="stamina-bar-container" id="stamina-box">
+        <div id="stamina-fill"></div>
+    </div>
 </div>
 
-<div id="results-screen">
-  <h1>EXTRACTION COMPLETE</h1>
-  <div id="stats">
-    <p>TIME: <span id="res-time">00.0</span>s</p>
-    <p>MOMENTUM KEPT: <span id="res-flow">0</span>%</p>
-  </div>
-  <div class="rating-text" id="res-rating">VAULTER</div>
-  <button onclick="location.reload()" style="padding: 15px; background: var(--accent); border: none; font-family: inherit; cursor: pointer; color: white; margin-top: 20px;">REPLAY</button>
-</div>
-
-<script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-    }
-  }
-</script>
-
-<script type="module">
-import * as THREE from 'three';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-
-// --- ENGINE INIT ---
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x050505);
-scene.fog = new THREE.FogExp2(0x050505, 0.012);
-
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1500);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-document.body.appendChild(renderer.domElement);
-
-// --- LIGHTING ---
-const ambient = new THREE.AmbientLight(0xffffff, 0.3);
-scene.add(ambient);
-const directional = new THREE.DirectionalLight(0x00aaff, 1.2);
-directional.position.set(10, 50, 10);
-directional.castShadow = true;
-scene.add(directional);
-
-// --- ARMS ---
-const armMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.2, metalness: 0.8 });
-const armGeo = new THREE.BoxGeometry(0.1, 0.1, 0.6);
-const leftArm = new THREE.Mesh(armGeo, armMat);
-const rightArm = new THREE.Mesh(armGeo, armMat);
-leftArm.position.set(-0.3, -0.2, -0.4);
-rightArm.position.set(0.3, -0.2, -0.4);
-camera.add(leftArm, rightArm);
-scene.add(camera);
-
-// --- PHYSICS CONSTANTS ---
-const GRAVITY = 35;
-const BASE_FRICTION = 10.0;
-const SLOPE_FRICTION = 4.0;
-const PLAYER_HEIGHT = 2.0;
-
-// --- LEVEL ASSETS & MATERIALS ---
-const matConcrete = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
-const matNeon = new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x00aaff, emissiveIntensity: 2 });
-const matSlope = new THREE.MeshStandardMaterial({ color: 0xccaa00 }); // Yellow caution
-const collidables = [];
-const wallRunners = [];
-const deathZoneY = -20;
-
-function createBox(w, h, d, x, y, z, mat, rotX=0, isWallRun=false) {
-    const geo = new THREE.BoxGeometry(w, h, d);
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(x, y, z);
-    mesh.rotation.x = rotX;
-    mesh.receiveShadow = true;
-    mesh.castShadow = true;
-    scene.add(mesh);
-    collidables.push(mesh);
-    if(isWallRun) wallRunners.push(mesh);
-    return mesh;
-}
-
-// --- WORLD GENERATION: THE FOUNDRY ---
-// Section 1: Ground Control
-createBox(10, 2, 50, 0, 0, 0, matConcrete); // Start floor
-createBox(10, 2, 50, 0, -2, -60, matConcrete); // After gap
-// Obstacle 2: The Vent
-createBox(10, 1, 1, 0, 2.8, -75, matConcrete); // Low pipe
-
-// Section 2: Verticality
-createBox(20, 2, 20, 0, -2, -100, matConcrete); 
-createBox(20, 10, 2, 0, 3, -110, matConcrete); // The Wall
-createBox(20, 2, 30, 0, 8, -135, matConcrete); // High Ledge floor
-
-// Section 3: Wall Run (The Gap of No Return)
-createBox(2, 15, 60, 10, 8, -190, matNeon, 0, true); // Right Wall Run
-createBox(2, 15, 60, -10, 18, -250, matNeon, 0, true); // Left Wall Run (Switch)
-createBox(20, 2, 20, 0, 15, -290, matConcrete);
-
-// Section 4: Momentum Transfer
-createBox(10, 2, 60, 0, 10, -340, matSlope, 0.15); // Slope
-createBox(20, 2, 40, 0, -5, -450, matConcrete); // Far landing
-
-// Section 5: The Helipad
-const helipad = createBox(15, 2, 15, 0, -5, -550, matNeon);
-
-// --- PLAYER STATE ---
-let velocity = new THREE.Vector3();
-let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-let isSprinting = false, isSliding = false, canJump = false, isWallRunning = false;
-let stamina = 100;
-let flowTime = 0, startTime = Date.now();
-let gameActive = true;
-
-const controls = new PointerLockControls(camera, document.body);
-document.addEventListener('mousedown', () => gameActive && controls.lock());
-
-// --- INPUT LOGIC ---
-const onKeyDown = (e) => {
-    if(!gameActive) return;
-    switch (e.code) {
-        case 'KeyW': moveForward = true; break;
-        case 'KeyS': moveBackward = true; break;
-        case 'KeyA': moveLeft = true; break;
-        case 'KeyD': moveRight = true; break;
-        case 'ShiftLeft': isSprinting = true; break;
-        case 'Space': handleJump(); break;
-        case 'KeyQ': performDash(); break;
-        case 'ControlLeft': startSlide(); break;
-        case 'KeyV': velocity.set(0, velocity.y, 0); break;
-    }
+<script>
+const CONFIG = {
+    type: Phaser.AUTO,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    backgroundColor: '#050505',
+    physics: {
+        default: 'arcade',
+        arcade: { gravity: { y: 1800 }, debug: false }
+    },
+    scene: { preload, create, update }
 };
 
-const onKeyUp = (e) => {
-    switch (e.code) {
-        case 'KeyW': moveForward = false; break;
-        case 'KeyS': moveBackward = false; break;
-        case 'KeyA': moveLeft = false; break;
-        case 'KeyD': moveRight = false; break;
-        case 'ShiftLeft': isSprinting = false; break;
+const game = new Phaser.Game(CONFIG);
+
+let player, keys, stamina = 100;
+let isSprinting = false, isSliding = false, isGrabbing = false, isDiving = false, isRolling = false;
+let trailEmitter, landEmitter, windEmitter, speedLines;
+let staminaFill, staminaBox;
+let audioCtx, masterGain, masterFilter, musicOsc, musicGain;
+let lastSpeedSfx = 0;
+let platforms, sceneRef;
+let currentLevel = null;
+let levelObjects = [];
+let levelZones = {};
+let checkpoint = { x: 200, y: 200 };
+let onRamp = false;
+let breathingInterval = null;
+const baseMusicFreq = 110; // Hz for subtle drone
+
+// Keep physics body size/offset in sync with the sprite's display size
+function syncBody(sprite) {
+    if (!sprite || !sprite.body) return;
+    // Use displayWidth/displayHeight so body matches visual size while scaling
+    const w = Math.max(4, Math.round(sprite.displayWidth));
+    const h = Math.max(4, Math.round(sprite.displayHeight));
+    sprite.body.setSize(w, h);
+    // Align body so the bottom of the physics box stays anchored to the sprite bottom
+    const originY = (typeof sprite.originY !== 'undefined') ? sprite.originY : (sprite.origin ? sprite.origin.y : 0.5);
+    const offsetX = Math.round((sprite.displayWidth - w) * 0.5);
+    let offsetY;
+    if (Math.abs(originY - 1) < 0.01) {
+        // Bottom origin: place body so its bottom aligns with sprite bottom
+        offsetY = Math.round(sprite.displayHeight - h);
+    } else {
+        // Default: center vertically
+        offsetY = Math.round((sprite.displayHeight - h) * 0.5);
     }
+    sprite.body.setOffset(offsetX, offsetY);
+}
+
+// Ability / state flags and cooldowns
+let isGliding = false, isSwinging = false, swingAnchor = null, swingLine = null, swingLength = 0, isSpinning = false;
+let sparkEmitter;
+const abilityCooldowns = {
+    power: { last: 0, duration: 3000 },
+    tether: { last: 0, duration: 1200 },
+    spiral: { last: 0, duration: 1000 },
+    glide: { last: 0, duration: 0 }
 };
+let controlsUI, cdPower, cdTether, cdSpiral, cdGlide;
 
-document.addEventListener('keydown', onKeyDown);
-document.addEventListener('keyup', onKeyUp);
+function preload() {
+    // CREATE HUMANOID DUMMY TEXTURE
+    const rt = this.make.graphics({ x: 0, y: 0, add: false });
+    rt.fillStyle(0xffffff);
+    // Head
+    rt.fillRect(12, 0, 8, 8);
+    // Torso
+    rt.fillRect(10, 10, 12, 18);
+    // Arms
+    rt.fillRect(6, 11, 4, 14);
+    rt.fillRect(22, 11, 4, 14);
+    // Legs
+    rt.fillRect(10, 28, 5, 20);
+    rt.fillRect(17, 28, 5, 20);
+    rt.generateTexture('humanoid', 32, 48);
 
-function startSlide() {
-    if (!isSliding && velocity.length() > 5) {
-        isSliding = true;
-        camera.position.y -= 1.2;
-        triggerMotionLines(600);
-        setTimeout(() => {
-            isSliding = false;
-            camera.position.y += 1.2;
-        }, 600);
+    // PIXEL PARTICLE
+    const p = this.make.graphics({ x: 0, y: 0, add: false });
+    p.fillStyle(0xffffff);
+    p.fillRect(0, 0, 4, 4);
+    p.generateTexture('pixel', 4, 4);
+}
+
+// Simple WebAudio helpers (synthesized SFX so no external files required)
+function playBlip(freq, duration = 0.08, type = 'sine', vol = 0.18) {
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const now = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, now);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(vol, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    o.connect(g); g.connect(masterGain);
+    o.start(now);
+    o.stop(now + duration + 0.02);
+}
+
+function playNoise(duration = 0.12, volume = 0.12) {
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const bufferSize = Math.floor(audioCtx.sampleRate * duration);
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+    const src = audioCtx.createBufferSource();
+    const g = audioCtx.createGain();
+    src.buffer = buffer;
+    g.gain.value = volume;
+    src.connect(g); g.connect(masterGain);
+    src.start();
+}
+
+function playDiveSfx() { playBlip(800, 0.06, 'sawtooth', 0.16); playNoise(0.08, 0.06); }
+function playRollSfx() { playBlip(220, 0.14, 'square', 0.18); playNoise(0.12, 0.12); }
+function playLandSfx() { playBlip(180, 0.12, 'sine', 0.14); playNoise(0.08, 0.06); }
+function playSpeedSfx() { playBlip(900, 0.04, 'sine', 0.08); }
+
+function create() {
+    const { width, height } = this.scale;
+    staminaFill = document.getElementById('stamina-fill');
+    staminaBox = document.getElementById('stamina-box');
+
+    // Init audio (resumes on first user gesture)
+    try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.22;
+        masterGain.connect(audioCtx.destination);
+    } catch (e) {
+        console.warn('Audio init failed', e);
     }
-}
+    const resumeAudio = () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); window.removeEventListener('pointerdown', resumeAudio); window.removeEventListener('keydown', resumeAudio); };
+    window.addEventListener('pointerdown', resumeAudio);
+    window.addEventListener('keydown', resumeAudio);
 
-function handleJump() {
-    if (canJump) {
-        // Momentum Transfer logic: Jump during slide gives huge boost
-        const boost = isSliding ? 1.8 : 1.0;
-        velocity.y += 15;
-        velocity.z *= boost;
-        canJump = false;
-    }
-}
+    // WORLD STUFF
+    const platforms = this.physics.add.staticGroup();
+    // Floor (thickness tuned to reduce tunneling but not too tall)
+    const floorThickness = 40;
+    platforms.add(this.add.rectangle(width/2, height - Math.round(floorThickness / 2), width, floorThickness, 0x111111));
+    // Ledges for testing grab
+    platforms.add(this.add.rectangle(width - 200, height - 300, 400, 20, 0x333333));
+    platforms.add(this.add.rectangle(200, height - 500, 400, 20, 0x333333));
 
-function performDash() {
-    if (stamina >= 30) {
-        const dashDir = new THREE.Vector3();
-        camera.getWorldDirection(dashDir);
-        dashDir.y = 0;
-        velocity.add(dashDir.normalize().multiplyScalar(45));
-        stamina -= 30;
-        triggerMotionLines(250);
-    }
-}
+    // AMBIENT WIND
+    windEmitter = this.add.particles(0, 0, 'pixel', {
+        x: { min: 0, max: width },
+        y: -10,
+        alpha: { start: 0.2, end: 0 },
+        scale: { min: 0.5, max: 1.5 },
+        speedY: { min: 200, max: 400 },
+        gravityX: 150,
+        lifespan: 3000,
+        frequency: 50
+    });
 
-function triggerMotionLines(dur) {
-    const ml = document.getElementById('motionLines');
-    ml.classList.add('active-fx');
-    setTimeout(() => ml.classList.remove('active-fx'), dur);
-}
+    // MOTION BLUR TRAIL
+    trailEmitter = this.add.particles(0, 0, 'humanoid', {
+        speed: 0,
+        scale: { start: 1, end: 0.8 },
+        alpha: { start: 0.3, end: 0 },
+        lifespan: 150,
+        frequency: -1,
+        blendMode: 'ADD'
+    });
 
-// --- CORE LOOPS ---
-const raycaster = new THREE.Raycaster();
-let prevTime = performance.now();
+    // LANDING BURST
+    landEmitter = this.add.particles(0, 0, 'pixel', {
+        speed: { min: 100, max: 200 },
+        angle: { min: 190, max: 350 },
+        scale: { start: 2, end: 0 },
+        lifespan: 500,
+        gravityY: 400,
+        emitting: false
+    });
 
-function animate() {
-    requestAnimationFrame(animate);
-    if (!gameActive) return;
+    // SPARK EMITTER for power-slide sparks
+    sparkEmitter = this.add.particles(0, 0, 'pixel', {
+        speed: { min: 220, max: 600 },
+        angle: { min: 200, max: 340 },
+        scale: { start: 1.6, end: 0.4 },
+        alpha: { start: 1, end: 0 },
+        gravityY: 2000,
+        lifespan: 450,
+        frequency: -1,
+        blendMode: 'ADD'
+    });
 
-    const time = performance.now();
-    const delta = (time - prevTime) / 1000;
-    const playerPos = controls.getObject().position;
+    // Controls UI (cooldowns shown middle-right)
+    controlsUI = document.createElement('div');
+    controlsUI.id = 'controls';
+    controlsUI.innerHTML = `
+        <div class="ctrl"><div><div class="label">Power-Slide</div><div class="keys">SHIFT+CTRL+S</div></div><div class="cd"><div id="cd-power" class="cd-fill"></div></div></div>
+        <div class="ctrl"><div><div class="label">Tether-Swing</div><div class="keys">Click Anchor</div></div><div class="cd"><div id="cd-tether" class="cd-fill"></div></div></div>
+        <div class="ctrl"><div><div class="label">Spiral Jump</div><div class="keys">A/D + SPACE</div></div><div class="cd"><div id="cd-spiral" class="cd-fill"></div></div></div>
+        <div class="ctrl"><div><div class="label">Glide</div><div class="keys">Hold SHIFT</div></div><div class="cd"><div id="cd-glide" class="cd-fill"></div></div></div>
+    `;
+    document.body.appendChild(controlsUI);
+    cdPower = document.getElementById('cd-power');
+    cdTether = document.getElementById('cd-tether');
+    cdSpiral = document.getElementById('cd-spiral');
+    cdGlide = document.getElementById('cd-glide');
 
-    if (controls.isLocked) {
-        // Tutorial Instructions logic
-        const z = playerPos.z;
-        const info = document.getElementById('instruction-box');
-        if (z > -40) info.innerHTML = "TAP SPACE TO JUMP";
-        else if (z > -70) info.innerHTML = "HOLD LEFT CTRL TO SLIDE UNDER THE VENT";
-        else if (z > -100) info.innerHTML = "JUMP TOWARD THE LEDGE TO CLIMB";
-        else if (z > -150) info.innerHTML = "HOLD SPACE AGAINST GLOWING WALLS TO RUN";
-        else if (z > -300) info.innerHTML = "SLIDE + JUMP FOR MAXIMUM MOMENTUM";
-        else info.innerHTML = "REACH THE HELIPAD";
+    // PLAYER SETUP
+    player = this.physics.add.sprite(width/2, height - 100, 'humanoid');
+    // Anchor player to bottom-center so squash keeps feet on the ground
+    player.setOrigin(0.5, 1);
+    player.setPosition(width/2, height - 100);
+    player.setCollideWorldBounds(true);
+    player.setDamping(true);
+    player.setDragX(0.01);
+    // Ensure physics body matches the sprite initially
+    syncBody(player);
 
-        // Stamina
-        stamina = Math.min(100, stamina + (isSprinting ? -25 : 15) * delta);
-        document.getElementById('staminaBar').style.width = stamina + "%";
+    // Keep world and camera bounds in sync with the canvas size so the ground sits at the bottom
+    this.physics.world.setBounds(0, 0, width, height);
+    this.cameras.main.setBounds(0, 0, width, height);
 
-        // Raycasting for Floor/Walls
-        raycaster.set(playerPos, new THREE.Vector3(0, -1, 0));
-        const intersects = raycaster.intersectObjects(collidables);
-        const onObject = intersects.length > 0 && intersects[0].distance < PLAYER_HEIGHT + 0.1;
+    // SPEED LINES OVERLAY
+    speedLines = this.add.graphics();
+    speedLines.setScrollFactor(0);
 
-        // Friction Logic (Lower on Slopes)
-        const currentFriction = (onObject && intersects[0].object.material === matSlope) ? SLOPE_FRICTION : BASE_FRICTION;
-        velocity.x -= velocity.x * currentFriction * delta;
-        velocity.z -= velocity.z * currentFriction * delta;
-
-        // Gravity & Wall Run
-        const lookDir = new THREE.Vector3(); camera.getWorldDirection(lookDir);
-        const sideRay = new THREE.Vector3().crossVectors(camera.up, lookDir).normalize();
-        raycaster.set(playerPos, sideRay);
-        const nearWall = raycaster.intersectObjects(wallRunners).length > 0 && raycaster.far < 3;
-        
-        isWallRunning = !onObject && nearWall && moveForward;
-
-        if (isWallRunning) {
-            velocity.y = 0;
-            velocity.z -= lookDir.z * 100 * delta;
-        } else {
-            velocity.y -= GRAVITY * delta;
-        }
-
-        // Movement
-        const direction = new THREE.Vector3(Number(moveRight) - Number(moveLeft), 0, Number(moveForward) - Number(moveBackward)).normalize();
-        const speed = (isSprinting && stamina > 0) ? 170 : (isSliding ? 200 : 90);
-        
-        if (moveForward || moveBackward) velocity.z -= direction.z * speed * delta;
-        if (moveLeft || moveRight) velocity.x -= direction.x * speed * delta;
-
-        controls.moveRight(-velocity.x * delta);
-        controls.moveForward(-velocity.z * delta);
-        playerPos.y += velocity.y * delta;
-
-        // Floor Collision
-        if (onObject && velocity.y < 0) {
-            velocity.y = 0;
-            canJump = true;
-            // Tuck Roll (Hard landing check)
-            if (velocity.y < -15 && !isSliding) {
-                velocity.z *= 0.5; // Stagger
+    this.physics.add.collider(player, platforms, (p, plat) => {
+        // Fix possible tunneling: if the player's physics body is overlapping the platform, nudge upwards
+        if (plat && plat.body && p && p.body) {
+            const overlap = (p.body.y + p.body.height) - plat.body.y;
+            if (overlap > 0) {
+                // Move sprite up so body sits on top of the platform
+                p.y -= (overlap + 1);
+                syncBody(p);
             }
         }
 
-        // Death/Respawn
-        if (playerPos.y < deathZoneY) {
-            playerPos.set(0, 5, 0);
-            velocity.set(0, 0, 0);
+        if (p.body.wasTouching.none && p.body.touching.down) {
+            landEmitter.emitParticleAt(p.x, p.y + 24, 12);
+            // Land Squash (keep body in sync while tweening)
+            this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true,
+                onUpdate: () => syncBody(p),
+                onComplete: () => syncBody(p)
+            });
+
+            // If we were diving, turn into a roll that preserves horizontal momentum
+            if (isDiving) {
+                isDiving = false;
+                isRolling = true;
+                const preserved = Phaser.Math.Clamp(Math.abs(p.body.velocity.x) * 0.95, 300, 1100);
+                const dir = p.flipX ? -1 : 1;
+                p.setVelocityX(dir * preserved);
+                p.setVelocityY(0);
+                this.tweens.add({
+                    targets: p,
+                    scaleY: 0.6,
+                    scaleX: 1.4,
+                    duration: 350,
+                    onUpdate: () => syncBody(p),
+                    onComplete: () => { isRolling = false; p.setScale(1); syncBody(p); }
+                });
+                playRollSfx();
+            } else {
+                playLandSfx();
+            }
         }
+    });
 
-        // Win Condition
-        if (playerPos.distanceTo(helipad.position) < 10) {
-            endGame();
-        }
+    // CAMERA
+    this.cameras.main.startFollow(player, true, 0.1, 0.1);
+    this.cameras.main.setZoom(1.3);
 
-        // Flow Calculation
-        if (velocity.length() > 15) flowTime += delta;
+    // INPUTS
+    keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,CTRL,SPACE');
+}
 
-        // Arm Bob
-        if(velocity.length() > 0.5 && canJump) {
-            const swingX = Math.sin(time * 0.01) * 0.05;
-            leftArm.position.y = -0.2 + swingX;
-            rightArm.position.y = -0.2 - swingX;
+function update() {
+    const isGrounded = player.body.touching.down;
+    let targetSpeed = 350;
+    let acceleration = 3000;
+
+    // --- STAMINA & SPRINTING ---
+    if (keys.SHIFT.isDown && (keys.A.isDown || keys.D.isDown) && stamina > 0 && !isSliding) {
+        isSprinting = true;
+        targetSpeed = 650;
+        stamina = Math.max(0, stamina - 0.7);
+    } else {
+        isSprinting = false;
+        stamina = Math.min(100, stamina + 0.4);
+    }
+
+    // UI Updates
+    staminaFill.style.transform = `scaleX(${stamina / 100})`;
+    const hue = (stamina / 100) * 120; // 120 is green, 0 is red
+    staminaFill.style.backgroundColor = `hsl(${hue}, 100%, 50%)`;
+
+    // Empty Stamina Shake
+    if (keys.SHIFT.isDown && stamina <= 0) {
+        gsap.to(staminaBox, { x: "+=3", duration: 0.05, yoyo: true, repeat: 3 });
+    }
+
+    // --- MOVEMENT ---
+    if (!isSliding && !isGrabbing && !isRolling) {
+        if (keys.A.isDown) {
+            player.setAccelerationX(-acceleration);
+            player.setFlipX(true);
+            player.setAngle(-8); // Lean
+        } else if (keys.D.isDown) {
+            player.setAccelerationX(acceleration);
+            player.setFlipX(false);
+            player.setAngle(8); // Lean
+        } else {
+            player.setAccelerationX(0);
+            player.setDragX(0.0001);
+            player.setAngle(0);
         }
     }
 
-    renderer.render(scene, camera);
-    prevTime = time;
+    const maxVertical = isGliding ? 500 : 1200;
+    player.setMaxVelocity(targetSpeed, maxVertical);
+
+    // --- Spiral Jump (A/D + SPACE during wall-run) ---
+    if ((player.body.blocked.left || player.body.blocked.right) && !isGrounded && (keys.A.isDown || keys.D.isDown) && Phaser.Input.Keyboard.JustDown(keys.SPACE) && (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration)) {
+        abilityCooldowns.spiral.last = performance.now();
+        const dir = player.body.blocked.left ? 1 : -1; // push away from wall
+        player.setVelocityY(-900);
+        player.setVelocityX(dir * 900);
+        isSpinning = true;
+        this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onUpdate: () => syncBody(player), onComplete: () => { player.setAngle(0); isSpinning = false; syncBody(player); } });
+        playRollSfx();
+    }
+
+    // --- JUMPING ---
+    if (Phaser.Input.Keyboard.JustDown(keys.SPACE)) {
+        if (isGrounded) {
+            player.setVelocityY(-800);
+            this.tweens.add({ targets: player, scaleX: 0.7, scaleY: 1.3, duration: 100, yoyo: true,
+                onUpdate: () => syncBody(player),
+                onComplete: () => syncBody(player)
+            });
+        } else if (isGrabbing) {
+            isGrabbing = false;
+            player.body.allowGravity = true;
+            player.setVelocityY(-700);
+            player.setVelocityX(player.flipX ? 500 : -500);
+        }
+    }
+
+    // --- SLIDE (GROUND), POWER-SLIDE, and DIVE (AIR) ---
+    if (Phaser.Input.Keyboard.JustDown(keys.CTRL) && !isSliding && !isDiving && !isRolling && stamina > 10) {
+        const now = performance.now();
+        // Power-Slide: SHIFT + CTRL + S (sharp brake, sparks)
+        if (keys.SHIFT.isDown && keys.S.isDown && isGrounded && (now - abilityCooldowns.power.last >= abilityCooldowns.power.duration)) {
+            abilityCooldowns.power.last = now;
+            isSliding = true;
+            stamina = Math.max(0, stamina - 30);
+            sparkEmitter.emitParticleAt(player.x, player.y + 12, 36);
+            player.setVelocityX(0);
+            player.setAccelerationX(0);
+            player.setDragX(800);
+            this.tweens.add({ targets: player, scaleY: 0.6, scaleX: 1.2, duration: 120, yoyo: true, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
+            this.time.delayedCall(380, () => { isSliding = false; player.setDragX(0.01); syncBody(player); });
+            playBlip(120, 0.08, 'square', 0.2);
+        } else if (isGrounded) {
+            // Ground slide / dash
+            isSliding = true;
+            stamina -= 20;
+            const dir = player.flipX ? -1 : 1;
+            player.setVelocityX(dir * 1100);
+            // Lower Camera / Squash
+            this.tweens.add({ targets: player, scaleY: 0.4, scaleX: 1.6, duration: 100,
+                onUpdate: () => syncBody(player),
+                onComplete: () => syncBody(player)
+            });
+            this.time.delayedCall(450, () => { if (isSliding) { isSliding = false; player.setScale(1); syncBody(player); } });
+            playSpeedSfx();
+        } else {
+            // Mid-air dive -> will roll on impact
+            isDiving = true;
+            stamina = Math.max(0, stamina - 10);
+            const dir = player.flipX ? -1 : 1;
+            player.setVelocityX(dir * 900);
+            player.setVelocityY(600);
+            player.body.allowGravity = true;
+            this.tweens.add({ targets: player, angle: dir * -30, duration: 200 });
+            playDiveSfx();
+        }
+    }
+
+    // Dash-Cancel
+    if (isSliding && Phaser.Input.Keyboard.JustDown(keys.SPACE)) {
+        isSliding = false;
+        player.setScale(1);
+        syncBody(player);
+        player.setVelocityY(-600);
+    }
+
+    // --- GLIDING (Hold SHIFT in air) ---
+    if (!isGrounded && keys.SHIFT.isDown && player.body.velocity.y > 0) {
+        if (!isGliding) isGliding = true;
+        // Reduce fall speed by counteracting part of world gravity
+        player.body.setGravityY(-1200);
+        player.setDragX(30);
+    } else if (isGliding) {
+        // stop gliding
+        isGliding = false;
+        player.body.setGravityY(0);
+        player.setDragX(0.01);
+    }
+
+    // --- LEDGE GRAB ---
+    if (!isGrounded && player.body.velocity.y > 0) {
+        if (player.body.blocked.left || player.body.blocked.right) {
+            isGrabbing = true;
+            player.setVelocity(0, 0);
+            player.body.allowGravity = false;
+        }
+    }
+    
+    if (isGrabbing && (keys.S.isDown || keys.SPACE.isDown)) {
+        isGrabbing = false;
+        player.body.allowGravity = true;
+    }
+
+    // --- VISUALS & TRAIL ---
+    if (Math.abs(player.body.velocity.x) > 400 || isSliding || isDiving) {
+        trailEmitter.emitParticleAt(player.x, player.y);
+    }
+
+    // --- TETHER-SWING (while holding mouse) ---
+    if (isSwinging && swingAnchor && swingLine) {
+        // approximate circular constraint and add tangential acceleration for "swing" feel
+        const dx = player.x - swingAnchor.x;
+        const dy = player.y - swingAnchor.y;
+        const len = Math.max(10, Math.sqrt(dx * dx + dy * dy));
+        const nx = dx / len, ny = dy / len;
+        const tangentX = -ny, tangentY = nx;
+        // small pull to keep to radius
+        const spring = (len - swingLength) * 0.2;
+        player.x -= nx * spring;
+        player.y -= ny * spring;
+        syncBody(player);
+        // add tangential velocity for centrifugal speed gains
+        const swingAccel = 18;
+        player.setVelocityX(player.body.velocity.x + tangentX * swingAccel);
+        player.setVelocityY(player.body.velocity.y + tangentY * swingAccel);
+        // update tether visual
+        swingLine.setTo(swingAnchor.x, swingAnchor.y, player.x, player.y);
+    }
+
+    // --- SPEED LINES + SFX TRIGGER ---
+    const speed = Math.abs(player.body.velocity.x);
+    const threshold = 420;
+    const maxSpeed = 1100;
+    const intensity = Phaser.Math.Clamp((speed - threshold) / (maxSpeed - threshold), 0, 1);
+
+    // --- Update cooldown UI ---
+    const now = performance.now();
+    function setCd(el, last, dur) {
+        if (!el) return;
+        if (!dur || dur <= 0) { el.style.width = '0%'; return; }
+        const t = Math.max(0, dur - (now - last));
+        const pct = (t / dur) * 100;
+        el.style.width = pct + '%';
+    }
+    setCd(cdPower, abilityCooldowns.power.last, abilityCooldowns.power.duration);
+    setCd(cdTether, abilityCooldowns.tether.last, abilityCooldowns.tether.duration);
+    setCd(cdSpiral, abilityCooldowns.spiral.last, abilityCooldowns.spiral.duration);
+    setCd(cdGlide, abilityCooldowns.glide.last, abilityCooldowns.glide.duration);
+
+    // Draw radial edge streaks when moving fast
+    if (intensity > 0.02) {
+        speedLines.clear();
+        const w = this.scale.width, h = this.scale.height, cx = w / 2, cy = h / 2;
+        speedLines.lineStyle(2, 0xffffff, 0.08 * intensity);
+        const lines = Math.floor(6 + intensity * 18);
+        for (let i = 0; i < lines; i++) {
+            const side = i % 4;
+            let sx, sy;
+            if (side === 0) { sx = 0; sy = Math.random() * h; }
+            else if (side === 1) { sx = w; sy = Math.random() * h; }
+            else if (side === 2) { sx = Math.random() * w; sy = 0; }
+            else { sx = Math.random() * w; sy = h; }
+            const tx = cx + (Math.random() - 0.5) * 300 * (1 - intensity * 0.2);
+            const ty = cy + (Math.random() - 0.5) * 150 * (1 - intensity * 0.2);
+            speedLines.strokeLineShape(new Phaser.Geom.Line(sx, sy, tx, ty));
+        }
+        // occasional whoosh when sustaining high speed (throttled)
+        if (performance.now() - lastSpeedSfx > 220 + (1 - intensity) * 600) { playSpeedSfx(); lastSpeedSfx = performance.now(); }
+    } else {
+        speedLines.clear();
+    }
 }
 
-function endGame() {
-    gameActive = false;
-    controls.unlock();
-    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-    const flowPerc = Math.min(100, Math.floor((flowTime / totalTime) * 100));
-    
-    document.getElementById('results-screen').style.display = 'flex';
-    document.getElementById('res-time').innerText = totalTime;
-    document.getElementById('res-flow').innerText = flowPerc;
-    
-    let rank = "INITIATE";
-    if(flowPerc > 60) rank = "TRACEUR";
-    if(flowPerc > 85) rank = "VAULTER";
-    document.getElementById('res-rating').innerText = rank;
-}
-
-animate();
-window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
+window.addEventListener('resize', () => { game.scale.resize(window.innerWidth, window.innerHeight); });
 </script>
 </body>
 </html>
