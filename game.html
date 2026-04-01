@@ -77,6 +77,23 @@
             pointer-events: none;
         }
 
+        /* --- TUTORIAL UI --- */
+        #tutorial-text {
+            position: absolute;
+            top: 25%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            color: #fff;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 16px;
+            text-align: center;
+            text-shadow: 3px 3px #00ff88;
+            z-index: 25;
+            pointer-events: none;
+            opacity: 0;
+            white-space: nowrap;
+        }
+
         #rating-screen {
             display: none;
             position: absolute;
@@ -107,6 +124,7 @@
 <body>
 
 <div id="level-banner">LEVEL 1 - THE FOUNDRY</div>
+<div id="tutorial-text">TUTORIAL START</div>
 
 <div id="ui-layer">
     <div class="stamina-bar-container" id="stamina-box">
@@ -165,6 +183,10 @@ let stylePoints = 0;
 let maxVelocityReached = 0;
 let checkpoints;
 let finishLine;
+
+// --- TUTORIAL VARIABLES ---
+let tutorialTriggerZones;
+let tutorialTextElement;
 
 function syncBody(sprite) {
     if (!sprite || !sprite.body) return;
@@ -271,11 +293,41 @@ function playRollSfx() { playBlip(220, 0.14, 'square', 0.18); playNoise(0.12, 0.
 function playLandSfx() { playBlip(180, 0.12, 'sine', 0.14); playNoise(0.08, 0.06); }
 function playSpeedSfx() { playBlip(900, 0.04, 'sine', 0.08); }
 
+// --- NEW TUTORIAL ANIMATION FUNCTION ---
+function showTutorial(message) {
+    if (!tutorialTextElement) return;
+    tutorialTextElement.innerText = message;
+    
+    // Kill existing animations on the element
+    gsap.killTweensOf(tutorialTextElement);
+
+    // POP and FADE animation
+    gsap.fromTo(tutorialTextElement, 
+        { scale: 0.2, opacity: 0, xPercent: -50, yPercent: -50 }, 
+        { 
+            scale: 1.2, 
+            opacity: 1, 
+            duration: 0.4, 
+            ease: "back.out(2)", 
+            onComplete: () => {
+                gsap.to(tutorialTextElement, { scale: 1, duration: 0.2 });
+                gsap.to(tutorialTextElement, { 
+                    opacity: 0, 
+                    duration: 1.2, 
+                    delay: 2.5, 
+                    ease: "power2.in" 
+                });
+            }
+        }
+    );
+}
+
 function create() {
     sceneRef = this;
     const { width, height } = this.scale;
     staminaFill = document.getElementById('stamina-fill');
     staminaBox = document.getElementById('stamina-box');
+    tutorialTextElement = document.getElementById('tutorial-text');
     startTime = performance.now();
 
     try {
@@ -338,6 +390,27 @@ function create() {
     // Finish Line
     finishLine = this.add.rectangle(9500, floorY - 200, 10, 400, 0xffffff);
     this.physics.add.existing(finishLine, true);
+
+    // --- NEW TUTORIAL TRIGGER ZONES ---
+    tutorialTriggerZones = this.physics.add.staticGroup();
+    const tutorials = [
+        { x: 300, y: floorY - 200, w: 200, h: 400, msg: "A / D TO MOVE" },
+        { x: 1000, y: floorY - 200, w: 200, h: 400, msg: "HOLD SHIFT TO SPRINT" },
+        { x: 2200, y: floorY - 200, w: 200, h: 400, msg: "SPACE TO JUMP" },
+        { x: 3400, y: floorY - 400, w: 300, h: 800, msg: "HOLD SHIFT IN AIR TO GLIDE" },
+        { x: 5100, y: floorY - 200, w: 200, h: 400, msg: "S TO CROUCH / CTRL TO SLIDE" },
+        { x: 6400, y: floorY - 200, w: 200, h: 400, msg: "CTRL IN AIR TO DIVE" },
+        { x: 7300, y: floorY - 300, w: 200, h: 600, msg: "JUMP AGAINST WALLS TO CLIMB" },
+        { x: 8100, y: floorY - 200, w: 200, h: 400, msg: "JUMP ONTO RAILS TO GRIND" }
+    ];
+
+    tutorials.forEach(t => {
+        let zone = this.add.zone(t.x, t.y, t.w, t.h);
+        this.physics.add.existing(zone, true);
+        zone.tutorialMsg = t.msg;
+        zone.triggered = false;
+        tutorialTriggerZones.add(zone);
+    });
 
     // AMBIENT VISUALS
     windEmitter = this.add.particles(0, 0, 'pixel', {
@@ -410,6 +483,14 @@ function create() {
                 this.tweens.add({ targets: p, scaleY: 0.6, scaleX: 1.4, duration: 350, onUpdate: () => syncBody(p), onComplete: () => { isRolling = false; p.setScale(1); syncBody(p); } });
                 playRollSfx(); stylePoints += 50;
             } else { playLandSfx(); }
+        }
+    });
+
+    // --- NEW TUTORIAL OVERLAP ---
+    this.physics.add.overlap(player, tutorialTriggerZones, (p, zone) => {
+        if (!zone.triggered) {
+            showTutorial(zone.tutorialMsg);
+            zone.triggered = true;
         }
     });
 
