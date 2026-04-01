@@ -59,17 +59,74 @@
         #controls .label { flex: 1; font-weight: 700; text-transform: uppercase; font-size: 11px; }
         #controls .keys { font-size: 11px; color: #111; margin-top: 2px; font-family: 'Press Start 2P', monospace; display: inline-flex; align-items: center; gap: 8px; background: #bfbfbf; padding: 4px 8px; border-radius: 4px; color: #0a0a0a; }
         #controls .cd-number { min-width: 26px; text-align: center; background: rgba(10,10,10,0.9); color: #fff; padding: 2px 4px; border-radius: 3px; font-size: 10px; }
-        /* keep old classes if present but unused */
         #controls .cd { display: none; }
         #controls .cd-fill { display: none; }
+
+        /* --- NEW UI ELEMENTS --- */
+        #level-banner {
+            position: absolute;
+            top: 15%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 24px;
+            text-align: center;
+            text-shadow: 4px 4px #ff4500;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        #rating-screen {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            background: rgba(0, 0, 0, 0.95);
+            border: 4px solid #ff4500;
+            padding: 30px;
+            color: #fff;
+            font-family: 'Press Start 2P', cursive;
+            text-align: center;
+            z-index: 100;
+            box-shadow: 0 0 50px rgba(255, 69, 0, 0.5);
+        }
+
+        .star { font-size: 40px; color: #444; }
+        .star.active { color: #ffd700; text-shadow: 0 0 10px #fff; }
+        
+        #stats-panel { font-size: 10px; text-align: left; margin: 20px 0; line-height: 1.8; }
+        .retry-btn { 
+            background: #ff4500; color: #fff; border: none; padding: 10px 20px; 
+            font-family: 'Press Start 2P'; cursor: pointer; margin-top: 10px;
+        }
     </style>
 </head>
 <body>
+
+<div id="level-banner">LEVEL 1 - THE FOUNDRY</div>
 
 <div id="ui-layer">
     <div class="stamina-bar-container" id="stamina-box">
         <div id="stamina-fill"></div>
     </div>
+</div>
+
+<div id="rating-screen">
+    <h2>CLEARED!</h2>
+    <div id="star-row">
+        <span class="star" id="star1">★</span>
+        <span class="star" id="star2">★</span>
+        <span class="star" id="star3">★</span>
+    </div>
+    <div id="stats-panel">
+        <div id="stat-time">TIME: 00:00</div>
+        <div id="stat-style">STYLE: 0</div>
+        <div id="stat-flow">MAX FLOW: 0%</div>
+    </div>
+    <button class="retry-btn" onclick="location.reload()">RESTART</button>
 </div>
 
 <script>
@@ -102,28 +159,29 @@ let onRamp = false;
 let breathingInterval = null;
 const baseMusicFreq = 110; // Hz for subtle drone
 
-// Keep physics body size/offset in sync with the sprite's display size
+// --- NEW LEVEL VARIABLES ---
+let startTime, endTime, levelFinished = false;
+let stylePoints = 0;
+let maxVelocityReached = 0;
+let checkpoints;
+let finishLine;
+
 function syncBody(sprite) {
     if (!sprite || !sprite.body) return;
-    // Use displayWidth/displayHeight so body matches visual size while scaling
     const w = Math.max(4, Math.round(sprite.displayWidth));
     const h = Math.max(4, Math.round(sprite.displayHeight));
     sprite.body.setSize(w, h);
-    // Align body so the bottom of the physics box stays anchored to the sprite bottom
     const originY = (typeof sprite.originY !== 'undefined') ? sprite.originY : (sprite.origin ? sprite.origin.y : 0.5);
     const offsetX = Math.round((sprite.displayWidth - w) * 0.5);
     let offsetY;
     if (Math.abs(originY - 1) < 0.01) {
-        // Bottom origin: place body so its bottom aligns with sprite bottom
         offsetY = Math.round(sprite.displayHeight - h);
     } else {
-        // Default: center vertically
         offsetY = Math.round((sprite.displayHeight - h) * 0.5);
     }
     sprite.body.setOffset(offsetX, offsetY);
 }
 
-// Ability / state flags and cooldowns
 let isGliding = false, isSpinning = false;
 let lastLandedAt = 0, landRollWindow = 320;
 let isGrinding = false, rails = [], currentRail = null, grindT = 0, grindDir = { x: 0, y: 0 }, grindSpeed = 0;
@@ -133,7 +191,6 @@ const abilityCooldowns = {
 };
 let controlsUI, cdSpiral, cdGlide;
 
-// Helper: closest point on a line segment
 function pointLineClosest(line, px, py) {
     const x1 = line.x1, y1 = line.y1, x2 = line.x2, y2 = line.y2;
     const vx = x2 - x1, vy = y2 - y1;
@@ -147,29 +204,37 @@ function pointLineClosest(line, px, py) {
 }
 
 function preload() {
-    // CREATE HUMANOID DUMMY TEXTURE
     const rt = this.make.graphics({ x: 0, y: 0, add: false });
     rt.fillStyle(0xffffff);
-    // Head
     rt.fillRect(12, 0, 8, 8);
-    // Torso
     rt.fillRect(10, 10, 12, 18);
-    // Arms
     rt.fillRect(6, 11, 4, 14);
     rt.fillRect(22, 11, 4, 14);
-    // Legs
     rt.fillRect(10, 28, 5, 20);
     rt.fillRect(17, 28, 5, 20);
     rt.generateTexture('humanoid', 32, 48);
 
-    // PIXEL PARTICLE
     const p = this.make.graphics({ x: 0, y: 0, add: false });
     p.fillStyle(0xffffff);
     p.fillRect(0, 0, 4, 4);
     p.generateTexture('pixel', 4, 4);
+
+    // Flag Texture for Checkpoints
+    const f = this.make.graphics({ x:0, y:0, add: false });
+    f.fillStyle(0x333333);
+    f.fillRect(0, 0, 4, 48); // Pole
+    f.fillStyle(0xff0000);
+    f.fillTriangle(4, 0, 4, 20, 24, 10); // Flag
+    f.generateTexture('flag_off', 32, 48);
+
+    const f2 = this.make.graphics({ x:0, y:0, add: false });
+    f2.fillStyle(0x333333);
+    f2.fillRect(0, 0, 4, 48);
+    f2.fillStyle(0x00ff88);
+    f2.fillTriangle(4, 0, 4, 20, 24, 10);
+    f2.generateTexture('flag_on', 32, 48);
 }
 
-// Simple WebAudio helpers (synthesized SFX so no external files required)
 function playBlip(freq, duration = 0.08, type = 'sine', vol = 0.18) {
     if (!audioCtx) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -207,168 +272,190 @@ function playLandSfx() { playBlip(180, 0.12, 'sine', 0.14); playNoise(0.08, 0.06
 function playSpeedSfx() { playBlip(900, 0.04, 'sine', 0.08); }
 
 function create() {
+    sceneRef = this;
     const { width, height } = this.scale;
     staminaFill = document.getElementById('stamina-fill');
     staminaBox = document.getElementById('stamina-box');
+    startTime = performance.now();
 
-    // Init audio (resumes on first user gesture)
     try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         masterGain = audioCtx.createGain();
         masterGain.gain.value = 0.22;
         masterGain.connect(audioCtx.destination);
-    } catch (e) {
-        console.warn('Audio init failed', e);
-    }
+    } catch (e) { console.warn('Audio init failed', e); }
+
     const resumeAudio = () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); window.removeEventListener('pointerdown', resumeAudio); window.removeEventListener('keydown', resumeAudio); };
     window.addEventListener('pointerdown', resumeAudio);
     window.addEventListener('keydown', resumeAudio);
 
-    // WORLD STUFF
     platforms = this.physics.add.staticGroup();
-    // Floor (thickness tuned to reduce tunneling but not too tall)
-    const floorThickness = 40;
-    platforms.add(this.add.rectangle(width/2, height - Math.round(floorThickness / 2), width, floorThickness, 0x111111));
-    // Ledges for testing grab
-    platforms.add(this.add.rectangle(width - 200, height - 300, 400, 20, 0x333333));
-    platforms.add(this.add.rectangle(200, height - 500, 400, 20, 0x333333));
-    // Rails for grinding (visuals + data)
+    checkpoints = this.physics.add.staticGroup();
+
+    // --- LEVEL 1: THE FOUNDRY DESIGN ---
+    const floorY = height - 40;
+    
+    // SECTION 1: GROUND FUNDAMENTALS
+    platforms.add(this.add.rectangle(400, floorY, 800, 80, 0x1a1a1a)); // Starting Block
+    platforms.add(this.add.rectangle(1500, floorY, 1200, 80, 0x1a1a1a)); // Sprint Straight
+    
+    // Checkpoint 1: The Spawn (Auto-activated)
+    let cp1 = checkpoints.create(100, floorY - 60, 'flag_on');
+    checkpoint = { x: 100, y: floorY - 100 };
+
+    // SECTION 2: VERTICALITY
+    platforms.add(this.add.rectangle(2400, floorY - 150, 200, 20, 0x333333)); 
+    platforms.add(this.add.rectangle(2700, floorY - 300, 200, 20, 0x333333)); // Staggered
+    platforms.add(this.add.rectangle(3200, floorY - 450, 400, 20, 0x444444)); // High Ledge
+    
+    // Checkpoint 2: Top of Ledge
+    checkpoints.create(3100, floorY - 510, 'flag_off');
+
+    // Gliding Chasm (Empty space between 3400 and 4200)
+    platforms.add(this.add.rectangle(4500, floorY, 600, 80, 0x1a1a1a)); 
+
+    // SECTION 3: MOMENTUM
+    // Low Clearance Tunnel
+    platforms.add(this.add.rectangle(5500, floorY, 1000, 80, 0x1a1a1a)); 
+    platforms.add(this.add.rectangle(5500, floorY - 60, 1000, 20, 0x333333)); // Ceiling
+    
+    // Pit Jump
+    platforms.add(this.add.rectangle(6800, floorY, 400, 80, 0x1a1a1a)); 
+
+    // SECTION 4: TECHNICAL FLOW
+    // Wall Path
+    platforms.add(this.add.rectangle(7500, floorY - 300, 40, 600, 0x222222)); // Wall 1
+    platforms.add(this.add.rectangle(7800, floorY - 300, 40, 600, 0x222222)); // Wall 2
+
+    // Rails
     rails = [
-        { x1: width/2 - 240, y1: height - 240, x2: width/2 + 240, y2: height - 320 },
-        { x1: width/2 + 300, y1: height - 300, x2: width/2 + 540, y2: height - 220 }
+        { x1: 8200, y1: floorY - 100, x2: 9000, y2: floorY - 400 } // Long Rail
     ];
     const railG = this.add.graphics();
     railG.lineStyle(6, 0x66ccff, 1);
     rails.forEach(r => railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2)));
 
-    // AMBIENT WIND
+    // Finish Line
+    finishLine = this.add.rectangle(9500, floorY - 200, 10, 400, 0xffffff);
+    this.physics.add.existing(finishLine, true);
+
+    // AMBIENT VISUALS
     windEmitter = this.add.particles(0, 0, 'pixel', {
-        x: { min: 0, max: width },
-        y: -10,
-        alpha: { start: 0.2, end: 0 },
-        scale: { min: 0.5, max: 1.5 },
-        speedY: { min: 200, max: 400 },
-        gravityX: 150,
-        lifespan: 3000,
-        frequency: 50
+        x: { min: 0, max: 10000 }, y: -10, alpha: { start: 0.2, end: 0 },
+        scale: { min: 0.5, max: 1.5 }, speedY: { min: 200, max: 400 },
+        gravityX: 150, lifespan: 3000, frequency: 50
     });
 
-    // MOTION BLUR TRAIL
     trailEmitter = this.add.particles(0, 0, 'humanoid', {
-        speed: 0,
-        scale: { start: 1, end: 0.8 },
-        alpha: { start: 0.3, end: 0 },
-        lifespan: 150,
-        frequency: -1,
-        blendMode: 'ADD'
+        speed: 0, scale: { start: 1, end: 0.8 }, alpha: { start: 0.3, end: 0 },
+        lifespan: 150, frequency: -1, blendMode: 'ADD'
     });
 
-    // LANDING BURST
     landEmitter = this.add.particles(0, 0, 'pixel', {
-        speed: { min: 100, max: 200 },
-        angle: { min: 190, max: 350 },
-        scale: { start: 2, end: 0 },
-        lifespan: 500,
-        gravityY: 400,
-        emitting: false
+        speed: { min: 100, max: 200 }, angle: { min: 190, max: 350 },
+        scale: { start: 2, end: 0 }, lifespan: 500, gravityY: 400, emitting: false
     });
 
-    
-
-    // Controls UI (cooldowns shown middle-right)
-    controlsUI = document.createElement('div');
-    controlsUI.id = 'controls';
-    controlsUI.innerHTML = `
-        <div class="ctrl"><div><div class="label">Move</div><div class="keys">A / D <span id="cdnum-move" class="cd-number"></span></div></div></div>
-        <div class="ctrl"><div><div class="label">Jump</div><div class="keys">SPACE <span id="cdnum-jump" class="cd-number"></span></div></div></div>
-        <div class="ctrl"><div><div class="label">Crouch / Down</div><div class="keys">S <span id="cdnum-crouch" class="cd-number"></span></div></div></div>
-        <div class="ctrl"><div><div class="label">Slide / Dive</div><div class="keys">CTRL <span id="cdnum-slide" class="cd-number"></span></div></div></div>
-        <div class="ctrl"><div><div class="label">Sprint</div><div class="keys">Hold SHIFT + A/D <span id="cdnum-sprint" class="cd-number"></span></div></div></div>
-        <div class="ctrl"><div><div class="label">Dash-Cancel</div><div class="keys">SPACE during slide <span id="cdnum-dash" class="cd-number"></span></div></div></div>
-        <div class="ctrl"><div><div class="label">Spiral Jump</div><div class="keys">A/D + SPACE <span id="cdnum-spiral" class="cd-number"></span></div></div></div>
-        <div class="ctrl"><div><div class="label">Glide</div><div class="keys">Hold SHIFT <span id="cdnum-glide" class="cd-number"></span></div></div></div>
-    `;
-    document.body.appendChild(controlsUI);
+    controlsUI = document.getElementById('controls');
+    if(!controlsUI) {
+        controlsUI = document.createElement('div');
+        controlsUI.id = 'controls';
+        controlsUI.innerHTML = `
+            <div class="ctrl"><div><div class="label">Move</div><div class="keys">A / D <span id="cdnum-move" class="cd-number"></span></div></div></div>
+            <div class="ctrl"><div><div class="label">Jump</div><div class="keys">SPACE <span id="cdnum-jump" class="cd-number"></span></div></div></div>
+            <div class="ctrl"><div><div class="label">Crouch / Down</div><div class="keys">S <span id="cdnum-crouch" class="cd-number"></span></div></div></div>
+            <div class="ctrl"><div><div class="label">Slide / Dive</div><div class="keys">CTRL <span id="cdnum-slide" class="cd-number"></span></div></div></div>
+            <div class="ctrl"><div><div class="label">Sprint</div><div class="keys">Hold SHIFT + A/D <span id="cdnum-sprint" class="cd-number"></span></div></div></div>
+            <div class="ctrl"><div><div class="label">Dash-Cancel</div><div class="keys">SPACE during slide <span id="cdnum-dash" class="cd-number"></span></div></div></div>
+            <div class="ctrl"><div><div class="label">Spiral Jump</div><div class="keys">A/D + SPACE <span id="cdnum-spiral" class="cd-number"></span></div></div></div>
+            <div class="ctrl"><div><div class="label">Glide</div><div class="keys">Hold SHIFT <span id="cdnum-glide" class="cd-number"></span></div></div></div>
+        `;
+        document.body.appendChild(controlsUI);
+    }
     cdSpiral = document.getElementById('cdnum-spiral');
     cdGlide = document.getElementById('cdnum-glide');
 
-    // PLAYER SETUP
-    player = this.physics.add.sprite(width/2, height - 100, 'humanoid');
-    // Anchor player to bottom-center so squash keeps feet on the ground
+    player = this.physics.add.sprite(checkpoint.x, checkpoint.y, 'humanoid');
     player.setOrigin(0.5, 1);
-    player.setPosition(width/2, height - 100);
-    player.setCollideWorldBounds(true);
+    player.setCollideWorldBounds(false); // Disable world bounds for large levels
     player.setDamping(true);
     player.setDragX(0.01);
-    // Ensure physics body matches the sprite initially
     syncBody(player);
 
-    // Keep world and camera bounds in sync with the canvas size so the ground sits at the bottom
-    this.physics.world.setBounds(0, 0, width, height);
-    this.cameras.main.setBounds(0, 0, width, height);
+    this.cameras.main.startFollow(player, true, 0.1, 0.1);
+    this.cameras.main.setZoom(1.1);
+    this.cameras.main.setBounds(0, 0, 10000, height);
 
-    // SPEED LINES OVERLAY
     speedLines = this.add.graphics();
     speedLines.setScrollFactor(0);
 
+    // Colliders
     this.physics.add.collider(player, platforms, (p, plat) => {
-        // Fix possible tunneling: if the player's physics body is overlapping the platform, nudge upwards
         if (plat && plat.body && p && p.body) {
             const overlap = (p.body.y + p.body.height) - plat.body.y;
-            if (overlap > 0) {
-                // Move sprite up so body sits on top of the platform
+            if (overlap > 0 && p.body.velocity.y >= 0) {
                 p.y -= (overlap + 1);
                 syncBody(p);
             }
         }
-
         if (p.body.wasTouching.none && p.body.touching.down) {
-            // register landing time for roll detection
             lastLandedAt = performance.now();
             landEmitter.emitParticleAt(p.x, p.y + 24, 12);
-            // Land Squash (keep body in sync while tweening)
-            this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true,
-                onUpdate: () => syncBody(p),
-                onComplete: () => syncBody(p)
-            });
-
-            // If we were diving, turn into a roll that preserves horizontal momentum
+            this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true, onUpdate: () => syncBody(p), onComplete: () => syncBody(p) });
             if (isDiving) {
-                isDiving = false;
-                isRolling = true;
+                isDiving = false; isRolling = true;
                 const preserved = Phaser.Math.Clamp(Math.abs(p.body.velocity.x) * 0.95, 300, 1100);
                 const dir = p.flipX ? -1 : 1;
                 p.setVelocityX(dir * preserved);
-                p.setVelocityY(0);
-                this.tweens.add({
-                    targets: p,
-                    scaleY: 0.6,
-                    scaleX: 1.4,
-                    duration: 350,
-                    onUpdate: () => syncBody(p),
-                    onComplete: () => { isRolling = false; p.setScale(1); syncBody(p); }
-                });
-                playRollSfx();
-            } else {
-                playLandSfx();
-            }
+                this.tweens.add({ targets: p, scaleY: 0.6, scaleX: 1.4, duration: 350, onUpdate: () => syncBody(p), onComplete: () => { isRolling = false; p.setScale(1); syncBody(p); } });
+                playRollSfx(); stylePoints += 50;
+            } else { playLandSfx(); }
         }
     });
 
-    // CAMERA
-    this.cameras.main.startFollow(player, true, 0.1, 0.1);
-    this.cameras.main.setZoom(1.3);
+    // Checkpoint Interaction
+    this.physics.add.overlap(player, checkpoints, (p, cp) => {
+        if(cp.texture.key === 'flag_off') {
+            cp.setTexture('flag_on');
+            checkpoint = { x: cp.x, y: cp.y };
+            playBlip(600, 0.2, 'sine', 0.1);
+        }
+    });
 
-    // INPUTS
+    // Finish Line Interaction
+    this.physics.add.overlap(player, finishLine, () => {
+        if (!levelFinished) {
+            levelFinished = true;
+            endTime = performance.now();
+            showRating();
+        }
+    });
+
     keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,CTRL,SPACE');
+
+    // Fade banner
+    this.tweens.add({
+        targets: document.getElementById('level-banner'),
+        opacity: 0,
+        duration: 3000,
+        delay: 2000
+    });
 }
 
 function update() {
+    if (levelFinished) return;
+
+    // Reset if falling out of world
+    if (player.y > this.scale.height + 200) {
+        player.setPosition(checkpoint.x, checkpoint.y);
+        player.setVelocity(0, 0);
+        stamina = 100;
+    }
+
     const isGrounded = player.body.touching.down;
     let targetSpeed = 350;
     let acceleration = 3000;
 
-    // --- STAMINA & SPRINTING ---
     if (keys.SHIFT.isDown && (keys.A.isDown || keys.D.isDown) && stamina > 0 && !isSliding) {
         isSprinting = true;
         targetSpeed = 650;
@@ -378,26 +465,23 @@ function update() {
         stamina = Math.min(100, stamina + 0.4);
     }
 
-    // UI Updates
     staminaFill.style.transform = `scaleX(${stamina / 100})`;
-    const hue = (stamina / 100) * 120; // 120 is green, 0 is red
+    const hue = (stamina / 100) * 120;
     staminaFill.style.backgroundColor = `hsl(${hue}, 100%, 50%)`;
 
-    // Empty Stamina Shake
     if (keys.SHIFT.isDown && stamina <= 0) {
         gsap.to(staminaBox, { x: "+=3", duration: 0.05, yoyo: true, repeat: 3 });
     }
 
-    // --- MOVEMENT ---
     if (!isSliding && !isGrabbing && !isRolling) {
         if (keys.A.isDown) {
             player.setAccelerationX(-acceleration);
             player.setFlipX(true);
-            player.setAngle(-8); // Lean
+            player.setAngle(-8);
         } else if (keys.D.isDown) {
             player.setAccelerationX(acceleration);
             player.setFlipX(false);
-            player.setAngle(8); // Lean
+            player.setAngle(8);
         } else {
             player.setAccelerationX(0);
             player.setDragX(0.0001);
@@ -407,14 +491,16 @@ function update() {
 
     const maxVertical = isGliding ? 500 : 1200;
     player.setMaxVelocity(targetSpeed, maxVertical);
+    
+    // Track Max Velocity for Flow Rating
+    maxVelocityReached = Math.max(maxVelocityReached, Math.abs(player.body.velocity.x));
 
-    // --- RAIL GRIND: start or update grinding along rails ---
+    // RAIL GRIND
     if (!isGrinding) {
-        // try to start a grind when near a rail and moving fast
         if (Math.abs(player.body.velocity.x) > 280 && rails && rails.length) {
             for (let r of rails) {
                 const res = pointLineClosest(r, player.x, player.y);
-                if (res.dist < 14) {
+                if (res.dist < 20) {
                     isGrinding = true;
                     currentRail = r;
                     grindT = res.t;
@@ -424,180 +510,137 @@ function update() {
                     grindSpeed = Math.max(360, Math.abs(player.body.velocity.x));
                     player.body.allowGravity = false;
                     player.body.setVelocity(0, 0);
-                    syncBody(player);
+                    stylePoints += 100;
                     break;
                 }
             }
         }
     } else {
-        // progress along the rail
         const dt = this.game.loop.delta / 1000;
         const vx = currentRail.x2 - currentRail.x1, vy = currentRail.y2 - currentRail.y1;
         const railLen = Math.sqrt(vx * vx + vy * vy) || 1;
         grindT += (grindSpeed * dt) / railLen;
         if (grindT >= 1 || grindT <= 0) {
-            // exit rail at end
             isGrinding = false;
             player.body.allowGravity = true;
             player.setVelocityX(grindDir.x * grindSpeed);
             player.setVelocityY(-480);
-            syncBody(player);
         } else {
-            const x = currentRail.x1 + vx * grindT;
-            const y = currentRail.y1 + vy * grindT;
-            player.setPosition(x, y);
-            syncBody(player);
-            // accelerate slightly while grinding
+            player.setPosition(currentRail.x1 + vx * grindT, currentRail.y1 + vy * grindT);
             grindSpeed = Math.min(1400, grindSpeed + 160 * dt);
-            // trick: press SPACE to jump off with a boost
             if (Phaser.Input.Keyboard.JustDown(keys.SPACE)) {
                 isGrinding = false;
                 player.body.allowGravity = true;
                 player.setVelocityX(grindDir.x * (grindSpeed + 300));
                 player.setVelocityY(-700);
-                syncBody(player);
-                playRollSfx();
+                playRollSfx(); stylePoints += 150;
             }
         }
+        syncBody(player);
     }
 
-    // --- Spiral Jump (A/D + SPACE during wall-run) ---
-    if ((player.body.blocked.left || player.body.blocked.right) && !isGrounded && (keys.A.isDown || keys.D.isDown) && Phaser.Input.Keyboard.JustDown(keys.SPACE) && (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration)) {
+    // SPIRAL JUMP
+    if ((player.body.blocked.left || player.body.blocked.right) && !isGrounded && Phaser.Input.Keyboard.JustDown(keys.SPACE) && (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration)) {
         abilityCooldowns.spiral.last = performance.now();
-        const dir = player.body.blocked.left ? 1 : -1; // push away from wall
+        const dir = player.body.blocked.left ? 1 : -1;
         player.setVelocityY(-900);
         player.setVelocityX(dir * 900);
         isSpinning = true;
         this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onUpdate: () => syncBody(player), onComplete: () => { player.setAngle(0); isSpinning = false; syncBody(player); } });
-        playRollSfx();
+        playRollSfx(); stylePoints += 200;
     }
 
-    // --- JUMPING ---
     if (Phaser.Input.Keyboard.JustDown(keys.SPACE)) {
         if (isGrounded) {
             player.setVelocityY(-800);
-            this.tweens.add({ targets: player, scaleX: 0.7, scaleY: 1.3, duration: 100, yoyo: true,
-                onUpdate: () => syncBody(player),
-                onComplete: () => syncBody(player)
-            });
+            this.tweens.add({ targets: player, scaleX: 0.7, scaleY: 1.3, duration: 100, yoyo: true, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
         } else if (isGrabbing) {
-            isGrabbing = false;
-            player.body.allowGravity = true;
-            player.setVelocityY(-700);
-            player.setVelocityX(player.flipX ? 500 : -500);
+            isGrabbing = false; player.body.allowGravity = true;
+            player.setVelocityY(-700); player.setVelocityX(player.flipX ? 500 : -500);
         }
     }
 
-    // --- SLIDE (GROUND) and DIVE (AIR) ---
+    // SLIDE / DIVE
     if (Phaser.Input.Keyboard.JustDown(keys.CTRL) && !isSliding && !isDiving && !isRolling && stamina > 10) {
         if (isGrounded) {
-            // Ground slide / dash
-            isSliding = true;
-            stamina -= 20;
+            isSliding = true; stamina -= 20;
             const dir = player.flipX ? -1 : 1;
             player.setVelocityX(dir * 1100);
-            // Lower Camera / Squash
-            this.tweens.add({ targets: player, scaleY: 0.4, scaleX: 1.6, duration: 100,
-                onUpdate: () => syncBody(player),
-                onComplete: () => syncBody(player)
-            });
+            this.tweens.add({ targets: player, scaleY: 0.4, scaleX: 1.6, duration: 100, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
             this.time.delayedCall(450, () => { if (isSliding) { isSliding = false; player.setScale(1); syncBody(player); } });
-            playSpeedSfx();
+            playSpeedSfx(); stylePoints += 25;
         } else {
-            // Mid-air dive -> will roll on impact
-            isDiving = true;
-            stamina = Math.max(0, stamina - 10);
+            isDiving = true; stamina = Math.max(0, stamina - 10);
             const dir = player.flipX ? -1 : 1;
-            player.setVelocityX(dir * 900);
-            player.setVelocityY(600);
+            player.setVelocityX(dir * 900); player.setVelocityY(600);
             player.body.allowGravity = true;
             this.tweens.add({ targets: player, angle: dir * -30, duration: 200 });
             playDiveSfx();
         }
     }
 
-    // Dash-Cancel
     if (isSliding && Phaser.Input.Keyboard.JustDown(keys.SPACE)) {
-        isSliding = false;
-        player.setScale(1);
-        syncBody(player);
-        player.setVelocityY(-600);
+        isSliding = false; player.setScale(1); syncBody(player);
+        player.setVelocityY(-600); stylePoints += 75; // Dash Cancel
     }
 
-    // --- GLIDING (Hold SHIFT in air) ---
     if (!isGrounded && keys.SHIFT.isDown && player.body.velocity.y > 0) {
         if (!isGliding) isGliding = true;
-        // Reduce fall speed by counteracting part of world gravity
-        player.body.setGravityY(-1200);
-        player.setDragX(30);
+        player.body.setGravityY(-1200); player.setDragX(30);
     } else if (isGliding) {
-        // stop gliding
-        isGliding = false;
-        player.body.setGravityY(0);
-        player.setDragX(0.01);
+        isGliding = false; player.body.setGravityY(0); player.setDragX(0.01);
     }
 
-    // --- LEDGE GRAB ---
     if (!isGrounded && player.body.velocity.y > 0) {
         if (player.body.blocked.left || player.body.blocked.right) {
-            isGrabbing = true;
-            player.setVelocity(0, 0);
-            player.body.allowGravity = false;
+            isGrabbing = true; player.setVelocity(0, 0); player.body.allowGravity = false;
         }
     }
-    
     if (isGrabbing && (keys.S.isDown || keys.SPACE.isDown)) {
-        isGrabbing = false;
-        player.body.allowGravity = true;
+        isGrabbing = false; player.body.allowGravity = true;
     }
 
-    // --- VISUALS & TRAIL ---
     if (Math.abs(player.body.velocity.x) > 400 || isSliding || isDiving) {
         trailEmitter.emitParticleAt(player.x, player.y);
     }
 
-    
-
-    // --- SPEED LINES + SFX TRIGGER ---
     const speed = Math.abs(player.body.velocity.x);
-    const threshold = 420;
-    const maxSpeed = 1100;
-    const intensity = Phaser.Math.Clamp((speed - threshold) / (maxSpeed - threshold), 0, 1);
-
-    // --- Update cooldown UI ---
+    const intensity = Phaser.Math.Clamp((speed - 420) / (1100 - 420), 0, 1);
+    
     const now = performance.now();
     function setCd(el, last, dur) {
         if (!el) return;
-        if (!dur || dur <= 0) { el.innerText = ''; return; }
         const remaining = Math.max(0, dur - (now - last));
         el.innerText = remaining > 0 ? Math.ceil(remaining / 1000) : '0';
     }
-    // update numeric cooldown displays (empty when not applicable)
     setCd(cdSpiral, abilityCooldowns.spiral.last, abilityCooldowns.spiral.duration);
     setCd(cdGlide, abilityCooldowns.glide.last, abilityCooldowns.glide.duration);
 
-    // Draw radial edge streaks when moving fast
     if (intensity > 0.02) {
         speedLines.clear();
-        const w = this.scale.width, h = this.scale.height, cx = w / 2, cy = h / 2;
         speedLines.lineStyle(2, 0xffffff, 0.08 * intensity);
-        const lines = Math.floor(6 + intensity * 18);
-        for (let i = 0; i < lines; i++) {
-            const side = i % 4;
-            let sx, sy;
-            if (side === 0) { sx = 0; sy = Math.random() * h; }
-            else if (side === 1) { sx = w; sy = Math.random() * h; }
-            else if (side === 2) { sx = Math.random() * w; sy = 0; }
-            else { sx = Math.random() * w; sy = h; }
-            const tx = cx + (Math.random() - 0.5) * 300 * (1 - intensity * 0.2);
-            const ty = cy + (Math.random() - 0.5) * 150 * (1 - intensity * 0.2);
-            speedLines.strokeLineShape(new Phaser.Geom.Line(sx, sy, tx, ty));
+        for (let i = 0; i < 12; i++) {
+            const sx = Math.random() * this.scale.width, sy = Math.random() * this.scale.height;
+            speedLines.strokeLineShape(new Phaser.Geom.Line(sx, sy, sx + (player.body.velocity.x * 0.1), sy));
         }
-        // occasional whoosh when sustaining high speed (throttled)
         if (performance.now() - lastSpeedSfx > 220 + (1 - intensity) * 600) { playSpeedSfx(); lastSpeedSfx = performance.now(); }
-    } else {
-        speedLines.clear();
-    }
+    } else { speedLines.clear(); }
+}
+
+function showRating() {
+    const totalTime = ((endTime - startTime) / 1000).toFixed(2);
+    const flowPercent = Math.min(100, Math.floor((maxVelocityReached / 1400) * 100));
+    
+    document.getElementById('stat-time').innerText = `TIME: ${totalTime}s`;
+    document.getElementById('stat-style').innerText = `STYLE: ${stylePoints}`;
+    document.getElementById('stat-flow').innerText = `MAX FLOW: ${flowPercent}%`;
+    
+    // Star Logic
+    if (totalTime < 30) document.getElementById('star1').classList.add('active');
+    if (stylePoints > 500) document.getElementById('star2').classList.add('active');
+    if (flowPercent > 80) document.getElementById('star3').classList.add('active');
+    
+    document.getElementById('rating-screen').style.display = 'block';
 }
 
 window.addEventListener('resize', () => { game.scale.resize(window.innerWidth, window.innerHeight); });
