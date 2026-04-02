@@ -9,7 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; padding: 0; background: #050505; overflow: hidden; }
-        canvas { display: block; image-rendering: pixelated; }
+        canvas { display: block; image-rendering: pixelated; transition: filter 0.1s; }
         
         #ui-layer {
             position: absolute;
@@ -128,6 +128,50 @@
         }
         .retry-btn:hover { background: #fff; color: #ff4500; border: 2px solid #ff4500; }
 
+        /* --- MENU SCREENS (Pause / Options) --- */
+        .menu-screen {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 450px;
+            background: rgba(0, 0, 0, 0.95);
+            border: 4px solid #66ccff;
+            padding: 30px;
+            color: #fff;
+            font-family: 'Press Start 2P', cursive;
+            text-align: center;
+            z-index: 300;
+            box-shadow: 0 0 50px rgba(102, 204, 255, 0.3);
+        }
+        .menu-screen h2 { color: #66ccff; margin-bottom: 25px; text-shadow: 2px 2px #000; }
+        
+        .btn-group-vertical {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            align-items: center;
+        }
+        .btn-group-vertical .retry-btn { width: 80%; font-size: 12px; padding: 12px; }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            text-align: left;
+            font-size: 10px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        .settings-grid label { line-height: 1.4; color: #ddd; }
+        .settings-grid input[type="range"], .settings-grid select {
+            width: 100%; cursor: pointer; font-family: 'Press Start 2P', monospace; font-size: 10px;
+        }
+        .settings-grid input[type="checkbox"] {
+            width: auto; transform: scale(1.5); margin-left: 10px; cursor: pointer;
+        }
+
         /* --- LEVEL SELECTOR --- */
         #level-selector {
             position: absolute;
@@ -220,7 +264,92 @@
     </div>
 </div>
 
+<div id="pause-screen" class="menu-screen">
+    <h2>PAUSED</h2>
+    <div class="btn-group-vertical">
+        <button class="retry-btn" onclick="resumeGame()">RESUME</button>
+        <button class="retry-btn" onclick="respawnPlayer()">RESPAWN</button>
+        <button class="retry-btn" onclick="restartLevel()">RESTART</button>
+        <button class="retry-btn" onclick="showOptions()">OPTIONS</button>
+        <button class="retry-btn" onclick="quitToMenu()">QUIT TO MENU</button>
+    </div>
+</div>
+
+<div id="options-screen" class="menu-screen">
+    <h2>SETTINGS</h2>
+    <div class="settings-grid">
+        <label>Toggle Sprint</label>
+        <input type="checkbox" id="opt-sprint" onchange="applySettings()">
+        
+        <label>Auto-Mantling</label>
+        <input type="checkbox" id="opt-mantle" onchange="applySettings()">
+        
+        <label>Camera Shake</label>
+        <input type="range" id="opt-shake" min="0" max="2" step="0.1" value="1" onchange="applySettings()">
+        
+        <label>Motion Blur</label>
+        <input type="range" id="opt-blur" min="0" max="1" step="0.1" value="0" onchange="applySettings()">
+        
+        <label>Resolution Scale</label>
+        <input type="range" id="opt-res" min="0.5" max="1.5" step="0.1" value="1" onchange="applySettings()">
+        
+        <label>FPS Limit</label>
+        <select id="opt-fps" onchange="applySettings()">
+            <option value="0">Uncapped</option>
+            <option value="120">120</option>
+            <option value="60">60</option>
+            <option value="30">30</option>
+        </select>
+    </div>
+    <button class="retry-btn" style="width:100%; margin-top: 10px;" onclick="closeOptions()">BACK</button>
+</div>
+
 <script>
+// --- GAME SETTINGS ---
+let gameSettings = {
+    toggleSprint: false,
+    autoMantle: true,
+    camShake: 1.0,
+    motionBlur: 0.0,
+    resScale: 1.0,
+    fpsLimit: 0
+};
+let sprintToggled = false;
+let isPaused = false;
+
+function loadSettings() {
+    let saved = localStorage.getItem('vaultSettings');
+    if (saved) Object.assign(gameSettings, JSON.parse(saved));
+    
+    document.getElementById('opt-sprint').checked = gameSettings.toggleSprint;
+    document.getElementById('opt-mantle').checked = gameSettings.autoMantle;
+    document.getElementById('opt-shake').value = gameSettings.camShake;
+    document.getElementById('opt-blur').value = gameSettings.motionBlur;
+    document.getElementById('opt-res').value = gameSettings.resScale;
+    document.getElementById('opt-fps').value = gameSettings.fpsLimit;
+}
+
+function applySettings() {
+    gameSettings.toggleSprint = document.getElementById('opt-sprint').checked;
+    gameSettings.autoMantle = document.getElementById('opt-mantle').checked;
+    gameSettings.camShake = parseFloat(document.getElementById('opt-shake').value);
+    gameSettings.motionBlur = parseFloat(document.getElementById('opt-blur').value);
+    gameSettings.resScale = parseFloat(document.getElementById('opt-res').value);
+    gameSettings.fpsLimit = parseInt(document.getElementById('opt-fps').value);
+
+    if (game && game.loop) {
+        game.loop.targetFps = gameSettings.fpsLimit > 0 ? gameSettings.fpsLimit : 0;
+    }
+    
+    if (sceneRef && sceneRef.cameras.main) {
+        sceneRef.cameras.main.setZoom(1.1 * gameSettings.resScale);
+    }
+
+    localStorage.setItem('vaultSettings', JSON.stringify(gameSettings));
+}
+
+document.addEventListener('DOMContentLoaded', loadSettings);
+
 const CONFIG = {
     type: Phaser.AUTO,
     width: window.innerWidth,
@@ -425,6 +554,7 @@ function returnToMenu() {
 }
 
 function restartLevel() {
+    if(isPaused) resumeGame();
     document.getElementById('rating-screen').style.display = 'none';
     sceneRef.scene.restart({ level: currentLevel });
 }
@@ -435,6 +565,62 @@ function nextLevel() {
     if (currentLevel === 1) next = 2;
     else if (currentLevel === 2) next = 3;
     sceneRef.scene.restart({ level: next });
+}
+
+// --- PAUSE MENU LOGIC ---
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        if (currentLevel !== 0 && !levelFinished) {
+            togglePause();
+        }
+    }
+});
+
+function togglePause() {
+    if (!sceneRef) return;
+    isPaused = !isPaused;
+    if (isPaused) {
+        sceneRef.scene.pause();
+        sceneRef.physics.pause();
+        document.getElementById('pause-screen').style.display = 'block';
+        document.getElementById('options-screen').style.display = 'none';
+    } else {
+        sceneRef.scene.resume();
+        sceneRef.physics.resume();
+        document.getElementById('pause-screen').style.display = 'none';
+        document.getElementById('options-screen').style.display = 'none';
+    }
+}
+
+function resumeGame() {
+    if (isPaused) togglePause();
+}
+
+function respawnPlayer() {
+    resumeGame();
+    player.setPosition(checkpoint.x, checkpoint.y);
+    player.setVelocity(0, 0);
+    stamina = 100;
+    if(currentLevel === 2 && speedingWall) {
+        speedingWall.x = checkpoint.x - 1000;
+        wallSpeed = 250;
+        if(wallSpeedTrigger) wallSpeedTrigger.active = true;
+    }
+}
+
+function showOptions() {
+    document.getElementById('pause-screen').style.display = 'none';
+    document.getElementById('options-screen').style.display = 'block';
+}
+
+function closeOptions() {
+    document.getElementById('options-screen').style.display = 'none';
+    document.getElementById('pause-screen').style.display = 'block';
+}
+
+function quitToMenu() {
+    resumeGame();
+    window.location.href = 'index.html';
 }
 
 function create(data) {
@@ -470,9 +656,11 @@ function create(data) {
     // Reset Globals
     startTime = performance.now();
     levelFinished = false;
+    isPaused = false;
     stylePoints = 0;
     maxVelocityReached = 0;
     stamina = 100;
+    sprintToggled = false;
     isGrinding = false;
     isSprinting = false; 
     isSliding = false; 
@@ -751,7 +939,7 @@ function create(data) {
     syncBody(player);
 
     this.cameras.main.startFollow(player, true, 0.1, 0.1);
-    this.cameras.main.setZoom(1.1);
+    this.cameras.main.setZoom(1.1 * gameSettings.resScale);
     this.cameras.main.setBounds(0, -3000, 10000, height + 3000);
 
     speedLines = this.add.graphics();
@@ -769,6 +957,12 @@ function create(data) {
         if (p.body.wasTouching.none && p.body.touching.down) {
             lastLandedAt = performance.now();
             landEmitter.emitParticleAt(p.x, p.y + 24, 12);
+            
+            // LANDING CAMERA SHAKE (Options Integration)
+            if (gameSettings.camShake > 0) {
+                this.cameras.main.shake(150, 0.003 * gameSettings.camShake);
+            }
+
             this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true, onUpdate: () => syncBody(p), onComplete: () => syncBody(p) });
             if (isDiving) {
                 isDiving = false; isRolling = true;
@@ -822,7 +1016,7 @@ function create(data) {
 }
 
 function update() {
-    if (currentLevel === 0) return; // Menu state
+    if (currentLevel === 0 || isPaused) return; // Menu state or Paused
     if (levelFinished) return;
 
     // Reset if falling out of world
@@ -867,7 +1061,9 @@ function update() {
         let dist = player.x - speedingWall.x;
         if (dist > 0 && dist < 600) {
             let intensity = (600 - dist) / 600;
-            this.cameras.main.shake(100, 0.005 * intensity);
+            
+            // Apply Camera Shake setting for Thresher
+            this.cameras.main.shake(100, 0.005 * intensity * gameSettings.camShake);
             
             if (stamina < 10) {
                 staminaBox.style.borderColor = 'red';
@@ -918,7 +1114,17 @@ function update() {
     let targetSpeed = 350;
     let acceleration = 3000;
 
-    if (keys.SHIFT.isDown && (keys.A.isDown || keys.D.isDown) && stamina > 0 && !isSliding) {
+    // SPRINT TOGGLE LOGIC INTEGRATION
+    let isSprintIntent = false;
+    if (gameSettings.toggleSprint) {
+        if (Phaser.Input.Keyboard.JustDown(keys.SHIFT)) sprintToggled = !sprintToggled;
+        isSprintIntent = sprintToggled && (keys.A.isDown || keys.D.isDown);
+    } else {
+        isSprintIntent = keys.SHIFT.isDown && (keys.A.isDown || keys.D.isDown);
+        sprintToggled = false;
+    }
+
+    if (isSprintIntent && stamina > 0 && !isSliding) {
         isSprinting = true;
         targetSpeed = 650;
         stamina = Math.max(0, stamina - 0.7);
@@ -926,12 +1132,15 @@ function update() {
         isSprinting = false;
         stamina = Math.min(100, stamina + 0.4);
     }
+    
+    // Automatically break sprint toggle if stamina depletes
+    if (stamina <= 0) sprintToggled = false;
 
     staminaFill.style.transform = `scaleX(${stamina / 100})`;
     const hue = (stamina / 100) * 120;
     staminaFill.style.backgroundColor = `hsl(${hue}, 100%, 50%)`;
 
-    if (keys.SHIFT.isDown && stamina <= 0) {
+    if (isSprintIntent && stamina <= 0) {
         gsap.to(staminaBox, { x: "+=3", duration: 0.05, yoyo: true, repeat: 3 });
     }
 
@@ -1007,11 +1216,14 @@ function update() {
     // 1. Determine Wall Stick (Grabbing)
     if (!isGrounded && player.body.velocity.y > 0 && !isSpinning && !inUpdraft) {
         if (hitLeft || hitRight) {
-            isGrabbing = true;
-            player.body.allowGravity = false;
-            player.setVelocityY(100); // Slow AAA slide
-            player.setVelocityX(0);
-            player.setFlipX(hitLeft ? true : false); // Face the wall
+            // Apply AUTO-MANTLE SETTING
+            if (gameSettings.autoMantle || keys.W.isDown || keys.SPACE.isDown) {
+                isGrabbing = true;
+                player.body.allowGravity = false;
+                player.setVelocityY(100); // Slow AAA slide
+                player.setVelocityX(0);
+                player.setFlipX(hitLeft ? true : false); // Face the wall
+            }
         }
     } else if (isGrounded || (!hitLeft && !hitRight)) {
         if (isGrabbing) {
@@ -1106,6 +1318,15 @@ function update() {
         }
         if (performance.now() - lastSpeedSfx > 220 + (1 - intensity) * 600) { playSpeedSfx(); lastSpeedSfx = performance.now(); }
     } else { speedLines.clear(); }
+
+    // --- MOTION BLUR APPLICATION ---
+    const canvas = document.querySelector('canvas');
+    if (gameSettings.motionBlur > 0 && speed > 500 && !isPaused) {
+        let blurVal = ((speed - 500) / 1000) * gameSettings.motionBlur * 4;
+        if(canvas) canvas.style.filter = `blur(${blurVal}px)`;
+    } else {
+        if(canvas) canvas.style.filter = 'none';
+    }
 }
 
 function showRating() {
