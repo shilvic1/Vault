@@ -16,6 +16,7 @@
             bottom: 30px;
             left: 30px;
             z-index: 10;
+            display: none; /* Hidden on menu */
         }
 
         .stamina-bar-container {
@@ -24,6 +25,7 @@
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
             overflow: hidden;
+            transition: box-shadow 0.2s, border-color 0.2s;
         }
 
         #stamina-fill {
@@ -52,8 +54,9 @@
             -moz-osx-font-smoothing: grayscale;
             image-rendering: pixelated;
             z-index: 12;
-            border: 3px solid #9aa0a6; /* visible border */
+            border: 3px solid #9aa0a6; 
             box-shadow: inset 0 0 0 2px rgba(0,0,0,0.6);
+            display: none; /* Hidden on menu */
         }
         #controls .ctrl { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
         #controls .label { flex: 1; font-weight: 700; text-transform: uppercase; font-size: 11px; }
@@ -75,6 +78,7 @@
             text-shadow: 4px 4px #ff4500;
             z-index: 20;
             pointer-events: none;
+            display: none;
         }
 
         /* --- TUTORIAL UI --- */
@@ -100,7 +104,7 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            width: 400px;
+            width: 450px;
             background: rgba(0, 0, 0, 0.95);
             border: 4px solid #ff4500;
             padding: 30px;
@@ -111,17 +115,77 @@
             box-shadow: 0 0 50px rgba(255, 69, 0, 0.5);
         }
 
-        .star { font-size: 40px; color: #444; }
+        .star { font-size: 40px; color: #444; transition: 0.3s; }
         .star.active { color: #ffd700; text-shadow: 0 0 10px #fff; }
         
         #stats-panel { font-size: 10px; text-align: left; margin: 20px 0; line-height: 1.8; }
+        
+        .btn-group { display: flex; justify-content: center; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
         .retry-btn { 
-            background: #ff4500; color: #fff; border: none; padding: 10px 20px; 
-            font-family: 'Press Start 2P'; cursor: pointer; margin-top: 10px;
+            background: #ff4500; color: #fff; border: none; padding: 10px 15px; 
+            font-family: 'Press Start 2P'; cursor: pointer; font-size: 10px;
+            transition: 0.2s; border: 2px solid transparent;
         }
+        .retry-btn:hover { background: #fff; color: #ff4500; border: 2px solid #ff4500; }
+
+        /* --- LEVEL SELECTOR --- */
+        #level-selector {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(5,5,5,0.98);
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-family: 'Press Start 2P', cursive;
+        }
+        #level-selector h1 {
+            color: #ff4500;
+            text-shadow: 4px 4px #000;
+            margin-bottom: 40px;
+            font-size: 32px;
+        }
+        .level-list {
+            display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;
+        }
+        .level-card {
+            background: rgba(255,255,255,0.05);
+            border: 2px solid #66ccff;
+            padding: 30px 20px;
+            cursor: pointer;
+            text-align: center;
+            width: 320px;
+            transition: 0.2s;
+            box-shadow: 0 0 15px rgba(102, 204, 255, 0.1);
+        }
+        .level-card:hover {
+            background: rgba(255,255,255,0.15);
+            transform: translateY(-5px);
+            box-shadow: 0 0 25px rgba(102, 204, 255, 0.4);
+        }
+        .level-card h3 { font-size: 14px; margin-bottom: 15px; line-height: 1.4; }
+        .menu-stars { margin-top: 15px; color: #444; font-size: 24px; letter-spacing: 5px; }
+        .menu-stars span.earned { color: #ffd700; text-shadow: 0 0 10px #ffd700; }
+
     </style>
 </head>
 <body>
+
+<div id="level-selector">
+    <h1>VAULT</h1>
+    <div class="level-list">
+        <div class="level-card" onclick="startLevel(1)">
+            <h3>LEVEL 1<br><br>THE FOUNDRY</h3>
+            <div class="menu-stars" id="menu-star-1"><span>★</span><span>★</span><span>★</span></div>
+        </div>
+        <div class="level-card" onclick="startLevel(2)">
+            <h3>LEVEL 2<br><br>THE NEON THRESHER</h3>
+            <div class="menu-stars" id="menu-star-2"><span>★</span><span>★</span><span>★</span></div>
+        </div>
+    </div>
+</div>
 
 <div id="level-banner">LEVEL 1 - THE FOUNDRY</div>
 <div id="tutorial-text">TUTORIAL START</div>
@@ -144,7 +208,11 @@
         <div id="stat-style">STYLE: 0</div>
         <div id="stat-flow">MAX FLOW: 0%</div>
     </div>
-    <button class="retry-btn" onclick="location.reload()">RESTART</button>
+    <div class="btn-group">
+        <button class="retry-btn" onclick="returnToMenu()">MENU</button>
+        <button class="retry-btn" onclick="restartLevel()">RESTART</button>
+        <button class="retry-btn" onclick="nextLevel()">NEXT LEVEL</button>
+    </div>
 </div>
 
 <script>
@@ -167,9 +235,9 @@ let isSprinting = false, isSliding = false, isGrabbing = false, isDiving = false
 let trailEmitter, landEmitter, windEmitter, speedLines;
 let staminaFill, staminaBox;
 let audioCtx, masterGain, masterFilter, musicOsc, musicGain;
-let lastSpeedSfx = 0;
+let lastSpeedSfx = 0, lastDroneTime = 0;
 let platforms, sceneRef;
-let currentLevel = null;
+let currentLevel = 0; // 0 = Menu
 let levelObjects = [];
 let levelZones = {};
 let checkpoint = { x: 200, y: 200 };
@@ -177,7 +245,7 @@ let onRamp = false;
 let breathingInterval = null;
 const baseMusicFreq = 110; // Hz for subtle drone
 
-// --- NEW LEVEL VARIABLES ---
+// --- LEVEL VARIABLES ---
 let startTime, endTime, levelFinished = false;
 let stylePoints = 0;
 let maxVelocityReached = 0;
@@ -187,6 +255,13 @@ let finishLine;
 // --- TUTORIAL VARIABLES ---
 let tutorialTriggerZones;
 let tutorialTextElement;
+
+// --- LEVEL 2 VARIABLES ---
+let speedingWall;
+let wallSpeed = 250;
+let hidingSpots;
+let isHidden = false;
+let wallSpeedTrigger;
 
 function syncBody(sprite) {
     if (!sprite || !sprite.body) return;
@@ -293,15 +368,11 @@ function playRollSfx() { playBlip(220, 0.14, 'square', 0.18); playNoise(0.12, 0.
 function playLandSfx() { playBlip(180, 0.12, 'sine', 0.14); playNoise(0.08, 0.06); }
 function playSpeedSfx() { playBlip(900, 0.04, 'sine', 0.08); }
 
-// --- NEW TUTORIAL ANIMATION FUNCTION ---
 function showTutorial(message) {
     if (!tutorialTextElement) return;
     tutorialTextElement.innerText = message;
     
-    // Kill existing animations on the element
     gsap.killTweensOf(tutorialTextElement);
-
-    // POP and FADE animation
     gsap.fromTo(tutorialTextElement, 
         { scale: 0.2, opacity: 0, xPercent: -50, yPercent: -50 }, 
         { 
@@ -322,19 +393,88 @@ function showTutorial(message) {
     );
 }
 
-function create() {
+function updateMenuStarsUI() {
+    let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false]};
+    for(let lvl = 1; lvl <= 2; lvl++) {
+        let starDiv = document.getElementById(`menu-star-${lvl}`);
+        if(starDiv) {
+            starDiv.innerHTML = stats[lvl].map(earned => `<span class="${earned ? 'earned' : ''}">★</span>`).join('');
+        }
+    }
+}
+
+// Menu Navigation Helpers
+function startLevel(lvl) {
+    document.getElementById('level-selector').style.display = 'none';
+    sceneRef.scene.restart({ level: lvl });
+}
+
+function returnToMenu() {
+    document.getElementById('rating-screen').style.display = 'none';
+    sceneRef.scene.restart({ level: 0 });
+}
+
+function restartLevel() {
+    document.getElementById('rating-screen').style.display = 'none';
+    sceneRef.scene.restart({ level: currentLevel });
+}
+
+function nextLevel() {
+    document.getElementById('rating-screen').style.display = 'none';
+    let next = currentLevel === 1 ? 2 : 0; 
+    sceneRef.scene.restart({ level: next });
+}
+
+function create(data) {
     sceneRef = this;
-    const { width, height } = this.scale;
+    currentLevel = typeof data.level !== 'undefined' ? data.level : 0;
+    
+    // UI Setup
+    tutorialTextElement = document.getElementById('tutorial-text');
     staminaFill = document.getElementById('stamina-fill');
     staminaBox = document.getElementById('stamina-box');
-    tutorialTextElement = document.getElementById('tutorial-text');
+    
+    // Check if showing Menu
+    if (currentLevel === 0) {
+        document.getElementById('level-selector').style.display = 'flex';
+        document.getElementById('ui-layer').style.display = 'none';
+        if(controlsUI) controlsUI.style.display = 'none';
+        updateMenuStarsUI();
+        return; // Halt game creation
+    }
+
+    // Initialize UI for Play
+    document.getElementById('level-selector').style.display = 'none';
+    document.getElementById('ui-layer').style.display = 'block';
+    if(controlsUI) controlsUI.style.display = 'block';
+
+    const banner = document.getElementById('level-banner');
+    banner.innerText = currentLevel === 1 ? 'LEVEL 1 - THE FOUNDRY' : 'LEVEL 2 - THE NEON THRESHER';
+    banner.style.display = 'block';
+    banner.style.opacity = 1;
+    
+    // Reset Globals
     startTime = performance.now();
+    levelFinished = false;
+    stylePoints = 0;
+    maxVelocityReached = 0;
+    stamina = 100;
+    isGrinding = false;
+    isSprinting = false; 
+    isSliding = false; 
+    isGrabbing = false; 
+    isDiving = false; 
+    isRolling = false;
+    rails = [];
+    document.querySelectorAll('.star').forEach(s => s.classList.remove('active'));
 
     try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        masterGain = audioCtx.createGain();
-        masterGain.gain.value = 0.22;
-        masterGain.connect(audioCtx.destination);
+        if(!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.22;
+            masterGain.connect(audioCtx.destination);
+        }
     } catch (e) { console.warn('Audio init failed', e); }
 
     const resumeAudio = () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); window.removeEventListener('pointerdown', resumeAudio); window.removeEventListener('keydown', resumeAudio); };
@@ -343,74 +483,135 @@ function create() {
 
     platforms = this.physics.add.staticGroup();
     checkpoints = this.physics.add.staticGroup();
-
-    // --- LEVEL 1: THE FOUNDRY DESIGN ---
-    const floorY = height - 40;
-    
-    // SECTION 1: GROUND FUNDAMENTALS
-    platforms.add(this.add.rectangle(400, floorY, 800, 80, 0x1a1a1a)); // Starting Block
-    platforms.add(this.add.rectangle(1500, floorY, 1200, 80, 0x1a1a1a)); // Sprint Straight
-    
-    // Checkpoint 1: The Spawn (Auto-activated)
-    let cp1 = checkpoints.create(100, floorY - 60, 'flag_on');
-    checkpoint = { x: 100, y: floorY - 100 };
-
-    // SECTION 2: VERTICALITY
-    platforms.add(this.add.rectangle(2400, floorY - 150, 200, 20, 0x333333)); 
-    platforms.add(this.add.rectangle(2700, floorY - 300, 200, 20, 0x333333)); // Staggered
-    platforms.add(this.add.rectangle(3200, floorY - 450, 400, 20, 0x444444)); // High Ledge
-    
-    // Checkpoint 2: Top of Ledge
-    checkpoints.create(3100, floorY - 510, 'flag_off');
-
-    // Gliding Chasm (Empty space between 3400 and 4200)
-    platforms.add(this.add.rectangle(4500, floorY, 600, 80, 0x1a1a1a)); 
-
-    // SECTION 3: MOMENTUM
-    // Low Clearance Tunnel
-    platforms.add(this.add.rectangle(5500, floorY, 1000, 80, 0x1a1a1a)); 
-    platforms.add(this.add.rectangle(5500, floorY - 60, 1000, 20, 0x333333)); // Ceiling
-    
-    // Pit Jump
-    platforms.add(this.add.rectangle(6800, floorY, 400, 80, 0x1a1a1a)); 
-
-    // SECTION 4: TECHNICAL FLOW
-    // Wall Path
-    platforms.add(this.add.rectangle(7500, floorY - 300, 40, 600, 0x222222)); // Wall 1
-    platforms.add(this.add.rectangle(7800, floorY - 300, 40, 600, 0x222222)); // Wall 2
-
-    // Rails
-    rails = [
-        { x1: 8200, y1: floorY - 100, x2: 9000, y2: floorY - 400 } // Long Rail
-    ];
-    const railG = this.add.graphics();
-    railG.lineStyle(6, 0x66ccff, 1);
-    rails.forEach(r => railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2)));
-
-    // Finish Line
-    finishLine = this.add.rectangle(9500, floorY - 200, 10, 400, 0xffffff);
-    this.physics.add.existing(finishLine, true);
-
-    // --- NEW TUTORIAL TRIGGER ZONES ---
     tutorialTriggerZones = this.physics.add.staticGroup();
-    const tutorials = [
-        { x: 300, y: floorY - 200, w: 200, h: 400, msg: "A / D TO MOVE" },
-        { x: 1000, y: floorY - 200, w: 200, h: 400, msg: "HOLD SHIFT TO SPRINT" },
-        { x: 2200, y: floorY - 200, w: 200, h: 400, msg: "SPACE TO JUMP" },
-        { x: 3400, y: floorY - 400, w: 300, h: 800, msg: "HOLD SHIFT IN AIR TO GLIDE" },
-        { x: 5100, y: floorY - 200, w: 200, h: 400, msg: "S TO CROUCH / CTRL TO SLIDE" },
-        { x: 6400, y: floorY - 200, w: 200, h: 400, msg: "CTRL IN AIR TO DIVE" },
-        { x: 7300, y: floorY - 300, w: 200, h: 600, msg: "JUMP AGAINST WALLS TO CLIMB" },
-        { x: 8100, y: floorY - 200, w: 200, h: 400, msg: "JUMP ONTO RAILS TO GRIND" }
-    ];
+    hidingSpots = this.physics.add.staticGroup();
 
-    tutorials.forEach(t => {
-        let zone = this.add.zone(t.x, t.y, t.w, t.h);
-        this.physics.add.existing(zone, true);
-        zone.tutorialMsg = t.msg;
-        zone.triggered = false;
-        tutorialTriggerZones.add(zone);
-    });
+    const { width, height } = this.scale;
+    const floorY = height - 40;
+
+    // ----- LEVEL BUILDER -----
+    if (currentLevel === 1) {
+        // LEVEL 1: THE FOUNDRY DESIGN
+        platforms.add(this.add.rectangle(400, floorY, 800, 80, 0x1a1a1a)); // Starting Block
+        platforms.add(this.add.rectangle(1500, floorY, 1200, 80, 0x1a1a1a)); // Sprint Straight
+        
+        let cp1 = checkpoints.create(100, floorY - 60, 'flag_on');
+        checkpoint = { x: 100, y: floorY - 100 };
+
+        platforms.add(this.add.rectangle(2400, floorY - 150, 200, 20, 0x333333)); 
+        platforms.add(this.add.rectangle(2700, floorY - 300, 200, 20, 0x333333)); 
+        platforms.add(this.add.rectangle(3200, floorY - 450, 400, 20, 0x444444)); 
+        
+        checkpoints.create(3100, floorY - 510, 'flag_off');
+        platforms.add(this.add.rectangle(4500, floorY, 600, 80, 0x1a1a1a)); 
+
+        platforms.add(this.add.rectangle(5500, floorY, 1000, 80, 0x1a1a1a)); 
+        platforms.add(this.add.rectangle(5500, floorY - 60, 1000, 20, 0x333333)); 
+        
+        platforms.add(this.add.rectangle(6800, floorY, 400, 80, 0x1a1a1a)); 
+
+        platforms.add(this.add.rectangle(7500, floorY - 300, 40, 600, 0x222222)); 
+        platforms.add(this.add.rectangle(7800, floorY - 300, 40, 600, 0x222222)); 
+
+        rails = [{ x1: 8200, y1: floorY - 100, x2: 9000, y2: floorY - 400 }];
+        const railG = this.add.graphics();
+        railG.lineStyle(6, 0x66ccff, 1);
+        rails.forEach(r => railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2)));
+
+        finishLine = this.add.rectangle(9500, floorY - 200, 10, 400, 0xffffff);
+        this.physics.add.existing(finishLine, true);
+
+        const tutorials = [
+            { x: 300, y: floorY - 200, w: 200, h: 400, msg: "A / D TO MOVE" },
+            { x: 1000, y: floorY - 200, w: 200, h: 400, msg: "HOLD SHIFT TO SPRINT" },
+            { x: 2200, y: floorY - 200, w: 200, h: 400, msg: "SPACE TO JUMP" },
+            { x: 3400, y: floorY - 400, w: 300, h: 800, msg: "HOLD SHIFT IN AIR TO GLIDE" },
+            { x: 5100, y: floorY - 200, w: 200, h: 400, msg: "S TO CROUCH / CTRL TO SLIDE" },
+            { x: 6400, y: floorY - 200, w: 200, h: 400, msg: "CTRL IN AIR TO DIVE" },
+            { x: 7300, y: floorY - 300, w: 200, h: 600, msg: "JUMP AGAINST WALLS TO CLIMB" },
+            { x: 8100, y: floorY - 200, w: 200, h: 400, msg: "JUMP ONTO RAILS TO GRIND" }
+        ];
+
+        tutorials.forEach(t => {
+            let zone = this.add.zone(t.x, t.y, t.w, t.h);
+            this.physics.add.existing(zone, true);
+            zone.tutorialMsg = t.msg;
+            zone.triggered = false;
+            tutorialTriggerZones.add(zone);
+        });
+    } else if (currentLevel === 2) {
+        // LEVEL 2: THE NEON THRESHER
+        checkpoint = { x: 100, y: floorY - 100 };
+        checkpoints.create(100, floorY - 60, 'flag_on');
+
+        wallSpeed = 250;
+        speedingWall = this.add.rectangle(-800, floorY - 300, 40, 800, 0xff0000);
+        this.physics.add.existing(speedingWall);
+        speedingWall.body.allowGravity = false;
+
+        // 1.1 - 1.2 Start and Sprint
+        platforms.add(this.add.rectangle(400, floorY, 800, 80, 0x1a1a1a));
+
+        // 1.3 Hiding Spot Alpha (800)
+        let hs1 = this.add.rectangle(800, floorY - 60, 100, 120, 0x222222);
+        this.physics.add.existing(hs1, true);
+        hidingSpots.add(hs1);
+
+        // 1.4 Checkpoint Alpha (1000)
+        checkpoints.create(1000, floorY - 60, 'flag_off');
+        platforms.add(this.add.rectangle(1000, floorY, 400, 80, 0x1a1a1a));
+
+        // 2.1 Vent Shaft (1200 - 2500)
+        platforms.add(this.add.rectangle(1850, floorY, 1300, 80, 0x1a1a1a)); 
+        platforms.add(this.add.rectangle(1500, floorY - 80, 600, 40, 0x333333)); // Ceiling 1
+        
+        // 2.2 Mid-Tunnel Hiding Spot (1800)
+        let hs2 = this.add.rectangle(1850, floorY - 80, 100, 160, 0x222222);
+        this.physics.add.existing(hs2, true);
+        hidingSpots.add(hs2);
+
+        platforms.add(this.add.rectangle(2150, floorY - 80, 500, 40, 0x333333)); // Ceiling 2
+        
+        // 2.3 Gap Jump (2400 - 2600 is pit)
+        
+        // 3.1 Velocity Escape
+        platforms.add(this.add.rectangle(2700, floorY, 200, 80, 0x1a1a1a)); // Landing
+        
+        // Trigger for wall speed
+        wallSpeedTrigger = this.add.zone(2500, floorY - 200, 100, 600);
+        this.physics.add.existing(wallSpeedTrigger, true);
+        wallSpeedTrigger.active = true;
+        
+        // 3.2 Speed Rail (2800 - 3400)
+        rails = [{ x1: 2800, y1: floorY - 100, x2: 3400, y2: floorY - 100 }];
+        const railG = this.add.graphics();
+        railG.lineStyle(6, 0x66ccff, 1);
+        rails.forEach(r => railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2)));
+        
+        // 3.3 Final Hiding Spot (3400)
+        platforms.add(this.add.rectangle(3450, floorY, 300, 80, 0x1a1a1a)); 
+        let hs3 = this.add.rectangle(3450, floorY - 60, 100, 120, 0x222222);
+        this.physics.add.existing(hs3, true);
+        hidingSpots.add(hs3);
+        
+        // 3.4 Exit Portal
+        platforms.add(this.add.rectangle(3800, floorY, 600, 80, 0x1a1a1a)); 
+        finishLine = this.add.rectangle(4000, floorY - 200, 40, 400, 0xffffff);
+        this.physics.add.existing(finishLine, true);
+
+        const tutorials2 = [
+            { x: 200, y: floorY - 200, w: 200, h: 400, msg: "SYSTEM ALERT: THRESHER ACTIVE. FIND COVER." },
+            { x: 700, y: floorY - 200, w: 200, h: 400, msg: "STAY IN THE SHADOWS" },
+            { x: 1100, y: floorY - 200, w: 200, h: 400, msg: "SLIDE TO SURVIVE THE VENT" }
+        ];
+        tutorials2.forEach(t => {
+            let zone = this.add.zone(t.x, t.y, t.w, t.h);
+            this.physics.add.existing(zone, true);
+            zone.tutorialMsg = t.msg;
+            zone.triggered = false;
+            tutorialTriggerZones.add(zone);
+        });
+    }
 
     // AMBIENT VISUALS
     windEmitter = this.add.particles(0, 0, 'pixel', {
@@ -450,7 +651,7 @@ function create() {
 
     player = this.physics.add.sprite(checkpoint.x, checkpoint.y, 'humanoid');
     player.setOrigin(0.5, 1);
-    player.setCollideWorldBounds(false); // Disable world bounds for large levels
+    player.setCollideWorldBounds(false); 
     player.setDamping(true);
     player.setDragX(0.01);
     syncBody(player);
@@ -486,7 +687,6 @@ function create() {
         }
     });
 
-    // --- NEW TUTORIAL OVERLAP ---
     this.physics.add.overlap(player, tutorialTriggerZones, (p, zone) => {
         if (!zone.triggered) {
             showTutorial(zone.tutorialMsg);
@@ -494,7 +694,6 @@ function create() {
         }
     });
 
-    // Checkpoint Interaction
     this.physics.add.overlap(player, checkpoints, (p, cp) => {
         if(cp.texture.key === 'flag_off') {
             cp.setTexture('flag_on');
@@ -503,7 +702,6 @@ function create() {
         }
     });
 
-    // Finish Line Interaction
     this.physics.add.overlap(player, finishLine, () => {
         if (!levelFinished) {
             levelFinished = true;
@@ -519,11 +717,13 @@ function create() {
         targets: document.getElementById('level-banner'),
         opacity: 0,
         duration: 3000,
-        delay: 2000
+        delay: 2000,
+        onComplete: () => { document.getElementById('level-banner').style.display = 'none'; }
     });
 }
 
 function update() {
+    if (currentLevel === 0) return; // Menu state
     if (levelFinished) return;
 
     // Reset if falling out of world
@@ -531,8 +731,64 @@ function update() {
         player.setPosition(checkpoint.x, checkpoint.y);
         player.setVelocity(0, 0);
         stamina = 100;
+        if(currentLevel === 2 && speedingWall) {
+            speedingWall.x = checkpoint.x - 1000;
+            wallSpeed = 250;
+            wallSpeedTrigger.active = true;
+        }
     }
 
+    // --- LEVEL 2: THRESHER MECHANICS ---
+    if (currentLevel === 2 && speedingWall) {
+        let dt = this.game.loop.delta / 1000;
+        speedingWall.x += wallSpeed * dt;
+        
+        isHidden = false;
+        this.physics.overlap(player, hidingSpots, () => { isHidden = true; });
+        
+        if (wallSpeedTrigger && wallSpeedTrigger.active) {
+            this.physics.overlap(player, wallSpeedTrigger, () => {
+                wallSpeedTrigger.active = false;
+                wallSpeed = 350;
+                showTutorial("WALL VELOCITY INCREASED");
+            });
+        }
+
+        if (!isHidden && player.x < speedingWall.x + 20 && player.x > speedingWall.x - 400) {
+            player.setPosition(checkpoint.x, checkpoint.y);
+            player.setVelocity(0, 0);
+            speedingWall.x = checkpoint.x - 1000;
+            wallSpeed = 250;
+            wallSpeedTrigger.active = true;
+            stamina = 100;
+            playRollSfx();
+            this.cameras.main.flash(500, 255, 0, 0);
+        }
+
+        let dist = player.x - speedingWall.x;
+        if (dist > 0 && dist < 600) {
+            let intensity = (600 - dist) / 600;
+            this.cameras.main.shake(100, 0.005 * intensity);
+            
+            if (stamina < 10) {
+                staminaBox.style.borderColor = 'red';
+                staminaBox.style.boxShadow = '0 0 10px red';
+            } else {
+                staminaBox.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                staminaBox.style.boxShadow = 'none';
+            }
+            
+            if (performance.now() - lastDroneTime > 200) {
+                playBlip(150 + (intensity * 200), 0.1, 'sawtooth', 0.1 * intensity);
+                lastDroneTime = performance.now();
+            }
+        } else {
+            staminaBox.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+            staminaBox.style.boxShadow = 'none';
+        }
+    }
+
+    // --- MOVEMENT ---
     const isGrounded = player.body.touching.down;
     let targetSpeed = 350;
     let acceleration = 3000;
@@ -573,7 +829,6 @@ function update() {
     const maxVertical = isGliding ? 500 : 1200;
     player.setMaxVelocity(targetSpeed, maxVertical);
     
-    // Track Max Velocity for Flow Rating
     maxVelocityReached = Math.max(maxVelocityReached, Math.abs(player.body.velocity.x));
 
     // RAIL GRIND
@@ -662,7 +917,7 @@ function update() {
 
     if (isSliding && Phaser.Input.Keyboard.JustDown(keys.SPACE)) {
         isSliding = false; player.setScale(1); syncBody(player);
-        player.setVelocityY(-600); stylePoints += 75; // Dash Cancel
+        player.setVelocityY(-600); stylePoints += 75; 
     }
 
     if (!isGrounded && keys.SHIFT.isDown && player.body.velocity.y > 0) {
@@ -716,11 +971,20 @@ function showRating() {
     document.getElementById('stat-style').innerText = `STYLE: ${stylePoints}`;
     document.getElementById('stat-flow').innerText = `MAX FLOW: ${flowPercent}%`;
     
-    // Star Logic
-    if (totalTime < 30) document.getElementById('star1').classList.add('active');
-    if (stylePoints > 500) document.getElementById('star2').classList.add('active');
-    if (flowPercent > 80) document.getElementById('star3').classList.add('active');
+    let starsEarned = [false, false, false];
+
+    if (totalTime < 30) { document.getElementById('star1').classList.add('active'); starsEarned[0] = true; }
+    if (stylePoints > 500) { document.getElementById('star2').classList.add('active'); starsEarned[1] = true; }
+    if (flowPercent > 80) { document.getElementById('star3').classList.add('active'); starsEarned[2] = true; }
     
+    // Save Rating
+    let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false]};
+    // Keep best stars
+    for(let i=0; i<3; i++) {
+        if(starsEarned[i]) stats[currentLevel][i] = true;
+    }
+    localStorage.setItem('vaultStats', JSON.stringify(stats));
+
     document.getElementById('rating-screen').style.display = 'block';
 }
 
