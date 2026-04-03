@@ -369,7 +369,7 @@
 <script>
 // --- URL MODE DETECTION ---
 const urlParams = new URLSearchParams(window.location.search);
-const isEndlessMode = urlParams.get('mode') === 'endless';
+const isEndlessMode = urlParams.get('mode') === 'endless' || urlParams.get('gamemode') === 'endless';
 
 // --- VIRTUAL KEY STATE FOR MOBILE ---
 let mobileKeys = { A: false, D: false, SPACE: false, CTRL: false, SHIFT: false, S: false, W: false };
