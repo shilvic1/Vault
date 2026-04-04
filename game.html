@@ -249,6 +249,22 @@
         }
         #flow-meter { color: #00ff88; text-shadow: 2px 2px #005522; transition: transform 0.1s; }
         
+        /* --- COMBO KING UI --- */
+        #combo-ui {
+            display: none;
+            position: absolute;
+            top: 80px;
+            right: 20px;
+            text-align: right;
+            color: #ffd700;
+            font-family: 'Press Start 2P', monospace;
+            text-shadow: 2px 2px #ff4500;
+            z-index: 21;
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
         .scanlines {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -292,6 +308,8 @@
     <div id="heat-meter">HEAT: 1</div>
     <div id="flow-meter">FLOW: 1.0x</div>
 </div>
+
+<div id="combo-ui">COMBO x1.0</div>
 
 <div id="ui-layer">
     <div class="stamina-bar-container" id="stamina-box">
@@ -373,7 +391,38 @@ const isEndlessMode = urlParams.get('mode') === 'endless' || urlParams.get('game
 
 // --- VIRTUAL KEY STATE FOR MOBILE ---
 let mobileKeys = { A: false, D: false, SPACE: false, CTRL: false, SHIFT: false, S: false, W: false };
-let mobileJustDown = { SPACE: false, CTRL: false, SHIFT: false };
+let mobileJustDown = { SPACE: false, CTRL: false, SHIFT: false, A: false, D: false };
+
+// --- AIR DASH VARIABLES ---
+let lastTapA = 0;
+let lastTapD = 0;
+let hasAirDashed = false;
+let isAirDashing = false;
+
+// --- COMBO KING SYSTEM ---
+let comboMultiplier = 1.0;
+let comboTimer = 0;
+let comboDecayDelay = 2.0;
+
+function addStylePoints(basePoints, moveName) {
+    stylePoints += Math.floor(basePoints * comboMultiplier);
+    comboMultiplier += 0.2; // Increase stack
+    comboTimer = comboDecayDelay; // Reset combo timer
+
+    let comboUI = document.getElementById('combo-ui');
+    if (comboUI) {
+        comboUI.style.display = 'block';
+        comboUI.innerText = `COMBO x${comboMultiplier.toFixed(1)}\n${moveName}`;
+        gsap.killTweensOf(comboUI);
+        gsap.fromTo(comboUI, { scale: 1.5 }, { scale: 1, duration: 0.2 });
+    }
+}
+
+function resetCombo() {
+    comboMultiplier = 1.0;
+    let comboUI = document.getElementById('combo-ui');
+    if(comboUI) comboUI.style.display = 'none';
+}
 
 // --- GAME SETTINGS ---
 let gameSettings = {
@@ -436,7 +485,7 @@ const game = new Phaser.Game(CONFIG);
 
 let player, keys, stamina = 100;
 let isSprinting = false, isSliding = false, isGrabbing = false, isDiving = false, isRolling = false;
-let trailEmitter, landEmitter, windEmitter, speedLines;
+let trailEmitter, landEmitter, windEmitter, speedLines, grindEmitter;
 let staminaFill, staminaBox;
 let audioCtx, masterGain, masterFilter, musicOsc, musicGain;
 let lastSpeedSfx = 0, lastDroneTime = 0;
@@ -529,6 +578,17 @@ function preload() {
     rt.fillRect(10, 28, 5, 20);
     rt.fillRect(17, 28, 5, 20);
     rt.generateTexture('humanoid', 32, 48);
+
+    // --- CLIMBING SPRITE GENERATION ---
+    const rtClimb = this.make.graphics({ x: 0, y: 0, add: false });
+    rtClimb.fillStyle(0x00ff88); // Unique neon green color indicator for climbing
+    rtClimb.fillRect(12, 0, 8, 8); // Head
+    rtClimb.fillRect(8, 10, 16, 18); // Body wider, showing back
+    rtClimb.fillRect(4, 8, 4, 16); // Arms up left
+    rtClimb.fillRect(24, 8, 4, 16); // Arms up right
+    rtClimb.fillRect(10, 28, 5, 20); // Legs
+    rtClimb.fillRect(17, 28, 5, 20); // Legs
+    rtClimb.generateTexture('climbing_sprite', 32, 48);
 
     const p = this.make.graphics({ x: 0, y: 0, add: false });
     p.fillStyle(0xffffff);
@@ -636,6 +696,14 @@ function returnToMenu() {
 function restartLevel() {
     if(isPaused) resumeGame();
     document.getElementById('rating-screen').style.display = 'none';
+    
+    // ENSURE URL STATE UPDATES IF RELOADED FROM DEATH SCREEN ON ENDLESS MODE
+    if (currentLevel === 99) {
+        const url = new URL(window.location);
+        url.searchParams.set('mode', 'endless');
+        window.history.replaceState({}, '', url);
+    }
+    
     sceneRef.scene.restart({ level: currentLevel });
 }
 
@@ -661,7 +729,7 @@ function addFlow(amount) {
 
 // PROCEDURAL CHUNK GENERATOR (ENDLESS)
 function spawnEndlessChunk(floorY) {
-    const type = Math.floor(Math.random() * 4); // 4 Chunk types
+    const type = Math.floor(Math.random() * 7); // Increased from 4 to 7 types
     const cX = lastChunkX;
     
     if (type === 0) {
@@ -720,6 +788,56 @@ function spawnEndlessChunk(floorY) {
 
         platforms.add(sceneRef.add.rectangle(cX + 1400, floorY - 600, 400, 80, 0x1a1a1a));
         lastChunkX += 1800;
+    } else if (type === 4) {
+        // Chunk E: Multi-Rail Pit
+        platforms.add(sceneRef.add.rectangle(cX + 200, floorY, 400, 80, 0x1a1a1a));
+        
+        rails.push({ x1: cX + 450, y1: floorY - 150, x2: cX + 900, y2: floorY - 150 });
+        rails.push({ x1: cX + 950, y1: floorY - 250, x2: cX + 1400, y2: floorY - 250 });
+        rails.push({ x1: cX + 1450, y1: floorY - 350, x2: cX + 1900, y2: floorY - 350 });
+        
+        let railG = sceneRef.add.graphics(); 
+        railG.lineStyle(6, 0x66ccff, 1);
+        railG.strokeLineShape(new Phaser.Geom.Line(cX + 450, floorY - 150, cX + 900, floorY - 150));
+        railG.strokeLineShape(new Phaser.Geom.Line(cX + 950, floorY - 250, cX + 1400, floorY - 250));
+        railG.strokeLineShape(new Phaser.Geom.Line(cX + 1450, floorY - 350, cX + 1900, floorY - 350));
+        
+        platforms.add(sceneRef.add.rectangle(cX + 2150, floorY - 300, 400, 80, 0x1a1a1a));
+        lastChunkX += 2500;
+    } else if (type === 5) {
+        // Chunk F: Slide-Dash Spike Gauntlet
+        platforms.add(sceneRef.add.rectangle(cX + 400, floorY, 800, 80, 0x1a1a1a));
+        platforms.add(sceneRef.add.rectangle(cX + 400, floorY - 100, 800, 40, 0x333333)); // Low ceiling
+        
+        let s1 = endlessSpikes.create(cX + 300, floorY - 45, 'pixel'); 
+        s1.setDisplaySize(60, 20); s1.setTint(0xff0000);
+        let s2 = endlessSpikes.create(cX + 600, floorY - 45, 'pixel'); 
+        s2.setDisplaySize(60, 20); s2.setTint(0xff0000);
+        
+        platforms.add(sceneRef.add.rectangle(cX + 1200, floorY, 400, 80, 0x1a1a1a));
+        lastChunkX += 1600;
+    } else if (type === 6) {
+        // Chunk G: Fan to Rail Launch
+        platforms.add(sceneRef.add.rectangle(cX + 200, floorY, 400, 80, 0x1a1a1a));
+        
+        let fanZ = sceneRef.add.zone(cX + 600, floorY - 400, 300, 800);
+        sceneRef.physics.add.existing(fanZ); 
+        fanZ.body.allowGravity = false; 
+        updrafts.add(fanZ);
+        sceneRef.add.rectangle(cX + 600, floorY, 300, 10, 0x00ffff);
+        fanEmitters.push(sceneRef.add.particles(0, 0, 'pixel', { 
+            x: { min: cX + 450, max: cX + 750 }, y: floorY, 
+            speedY: { min: -400, max: -800 }, lifespan: 1500, 
+            alpha: { start: 0.5, end: 0 }, scale: { min: 1, max: 3 }, blendMode: 'ADD' 
+        }));
+        
+        rails.push({ x1: cX + 800, y1: floorY - 600, x2: cX + 1600, y2: floorY - 600 });
+        let rG = sceneRef.add.graphics(); 
+        rG.lineStyle(6, 0x66ccff, 1);
+        rG.strokeLineShape(new Phaser.Geom.Line(cX + 800, floorY - 600, cX + 1600, floorY - 600));
+        
+        platforms.add(sceneRef.add.rectangle(cX + 1900, floorY - 550, 400, 80, 0x1a1a1a));
+        lastChunkX += 2300;
     }
 }
 
@@ -759,6 +877,7 @@ function respawnPlayer() {
     player.setPosition(checkpoint.x, checkpoint.y);
     player.setVelocity(0, 0);
     stamina = 100;
+    resetCombo(); // Reset combo on respawn
     if(currentLevel === 2 && speedingWall) {
         speedingWall.x = checkpoint.x - 1000;
         wallSpeed = 250;
@@ -778,7 +897,7 @@ function closeOptions() {
 
 function quitToMenu() {
     resumeGame();
-    if(isEndlessMode) {
+    if(isEndlessMode || currentLevel === 99) {
         window.location.href = window.location.pathname; // Remove query
     } else {
         window.location.href = 'index.html';
@@ -793,6 +912,13 @@ function create(data) {
         currentLevel = 99; // Endless Trigger
     } else {
         currentLevel = typeof data.level !== 'undefined' ? data.level : 0;
+    }
+
+    // PUSH URL TO ENDLESS STATE SO PAGE REFRESHES STAY IN ENDLESS MODE
+    if (currentLevel === 99) {
+        const url = new URL(window.location);
+        url.searchParams.set('mode', 'endless');
+        window.history.replaceState({}, '', url);
     }
     
     // UI Setup
@@ -842,6 +968,7 @@ function create(data) {
     levelFinished = false;
     isPaused = false;
     stylePoints = 0;
+    resetCombo(); // Initialize combo metrics
     maxVelocityReached = 0;
     stamina = 100;
     sprintToggled = false;
@@ -851,6 +978,8 @@ function create(data) {
     isGrabbing = false; 
     isDiving = false; 
     isRolling = false;
+    hasAirDashed = false;
+    isAirDashing = false;
     rails = [];
     updrafts = null;
     movingPlatforms = null;
@@ -927,7 +1056,7 @@ function create(data) {
             { x: 3400, y: floorY - 400, w: 300, h: 800, msg: "HOLD SHIFT IN AIR TO GLIDE" },
             { x: 5100, y: floorY - 200, w: 200, h: 400, msg: "S TO CROUCH / CTRL TO SLIDE" },
             { x: 6400, y: floorY - 200, w: 200, h: 400, msg: "CTRL IN AIR TO DIVE" },
-            { x: 7300, y: floorY - 300, w: 200, h: 600, msg: "JUMP AGAINST WALLS TO STICK" },
+            { x: 7300, y: floorY - 300, w: 200, h: 600, msg: "JUMP AGAINST WALLS TO STICK OR DOUBLE TAP MID-AIR TO DASH" },
             { x: 8100, y: floorY - 200, w: 200, h: 400, msg: "JUMP ONTO RAILS TO GRIND" }
         ];
 
@@ -1076,7 +1205,7 @@ function create(data) {
         this.physics.add.existing(finishLine, true);
 
         const tutorials3 = [
-            { x: 1460, y: floorY - 200, w: 200, h: 400, msg: "PUSH AWAY (A/D) + SPACE OFF WALLS TO SPIRAL JUMP" },
+            { x: 1460, y: floorY - 200, w: 200, h: 400, msg: "PUSH AWAY (A/D) + SPACE OFF WALLS TO SPIRAL JUMP. HOLD JUMP TO CLIMB." },
             { x: 2500, y: floorY - 1600, w: 300, h: 400, msg: "JUMP INTO THE FAN AND HOLD SHIFT TO GLIDE" },
             { x: 4200, y: floorY - 2000, w: 200, h: 400, msg: "MEGA DROP AHEAD! DIVE (CTRL) TO SURVIVE" }
         ];
@@ -1129,6 +1258,18 @@ function create(data) {
         scale: { start: 2, end: 0 }, lifespan: 500, gravityY: 400, emitting: false
     });
 
+    // --- GRIND PARTICLES ---
+    grindEmitter = this.add.particles(0, 0, 'pixel', {
+        speed: { min: 100, max: 300 },
+        angle: { min: 250, max: 290 },
+        scale: { start: 1.5, end: 0 },
+        tint: 0xffff00,
+        lifespan: 250,
+        gravityY: 600,
+        emitting: false,
+        blendMode: 'ADD'
+    });
+
     controlsUI = document.getElementById('controls');
     if(!controlsUI) {
         controlsUI = document.createElement('div');
@@ -1173,6 +1314,7 @@ function create(data) {
         }
         if (p.body.wasTouching.none && p.body.touching.down) {
             lastLandedAt = performance.now();
+            hasAirDashed = false; // RESET AIR DASH
             landEmitter.emitParticleAt(p.x, p.y + 24, 12);
             
             // LANDING CAMERA SHAKE (Options Integration)
@@ -1188,7 +1330,7 @@ function create(data) {
                 // If velocity is very low, snap to 0 to prevent sliding off tiny platforms
                 p.setVelocityX(preserved > 150 ? dir * preserved : 0);
                 this.tweens.add({ targets: p, scaleY: 0.6, scaleX: 1.4, duration: 350, onUpdate: () => syncBody(p), onComplete: () => { isRolling = false; p.setScale(1); syncBody(p); } });
-                playRollSfx(); stylePoints += 50;
+                playRollSfx(); addStylePoints(50, "ROLL");
             } else { 
                 playLandSfx(); 
                 if (currentLevel === 99 && player.body.velocity.y > 600 && !isRolling) {
@@ -1257,6 +1399,14 @@ function update() {
     
     let dt = this.game.loop.delta / 1000;
 
+    // --- COMBO KING TIMER DECAY ---
+    if (comboMultiplier > 1.0) {
+        comboTimer -= dt;
+        if (comboTimer <= 0) {
+            resetCombo();
+        }
+    }
+
     // --- Dynamic Mobile UI updates ---
     const isGrounded = player.body.touching.down;
     const btnSlideUI = document.getElementById('btn-slide');
@@ -1281,6 +1431,7 @@ function update() {
         player.setPosition(checkpoint.x, checkpoint.y);
         player.setVelocity(0, 0);
         stamina = 100;
+        resetCombo();
         if(currentLevel === 2 && speedingWall) {
             speedingWall.x = checkpoint.x - 1000;
             wallSpeed = 250;
@@ -1428,6 +1579,44 @@ function update() {
         }
     }
 
+    // --- DOUBLE-TAP AIR DASH MECHANIC ---
+    if (Phaser.Input.Keyboard.JustDown(keys.A) || mobileJustDown.A) {
+        if (performance.now() - lastTapA < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
+            hasAirDashed = true;
+            isAirDashing = true;
+            stamina -= 10;
+            player.body.allowGravity = false;
+            player.setVelocityY(0);
+            player.setVelocityX(-1200);
+            this.tweens.add({ targets: player, scaleY: 0.5, scaleX: 1.5, duration: 150, yoyo: true });
+            playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
+            this.time.delayedCall(200, () => {
+                isAirDashing = false;
+                if (!isGrabbing && !isGliding) player.body.allowGravity = true;
+            });
+        }
+        lastTapA = performance.now();
+    }
+    
+    if (Phaser.Input.Keyboard.JustDown(keys.D) || mobileJustDown.D) {
+        if (performance.now() - lastTapD < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
+            hasAirDashed = true;
+            isAirDashing = true;
+            stamina -= 10;
+            player.body.allowGravity = false;
+            player.setVelocityY(0);
+            player.setVelocityX(1200);
+            this.tweens.add({ targets: player, scaleY: 0.5, scaleX: 1.5, duration: 150, yoyo: true });
+            playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
+            this.time.delayedCall(200, () => {
+                isAirDashing = false;
+                if (!isGrabbing && !isGliding) player.body.allowGravity = true;
+            });
+        }
+        lastTapD = performance.now();
+    }
+
+
     // --- MOVEMENT ---
     let baseMovementSpeed = 350;
     if (currentLevel === 99) {
@@ -1472,7 +1661,7 @@ function update() {
         gsap.to(staminaBox, { x: "+=3", duration: 0.05, yoyo: true, repeat: 3 });
     }
 
-    if (!isSliding && !isGrabbing && !isRolling) {
+    if (!isSliding && !isGrabbing && !isRolling && !isAirDashing) {
         if (keys.A.isDown || mobileKeys.A) {
             player.setAccelerationX(-acceleration);
             player.setFlipX(true);
@@ -1495,6 +1684,7 @@ function update() {
 
     // RAIL GRIND
     if (!isGrinding) {
+        grindEmitter.emitting = false;
         if (Math.abs(player.body.velocity.x) > 280 && rails && rails.length) {
             for (let r of rails) {
                 const res = pointLineClosest(r, player.x, player.y);
@@ -1508,13 +1698,16 @@ function update() {
                     grindSpeed = Math.max(360, Math.abs(player.body.velocity.x));
                     player.body.allowGravity = false;
                     player.body.setVelocity(0, 0);
-                    stylePoints += 100;
+                    addStylePoints(100, "GRIND");
                     addFlow(1.0);
                     break;
                 }
             }
         }
     } else {
+        grindEmitter.emitting = true;
+        grindEmitter.setPosition(player.x, player.y + 12); // Emit at feet
+        
         const vx = currentRail.x2 - currentRail.x1, vy = currentRail.y2 - currentRail.y1;
         const railLen = Math.sqrt(vx * vx + vy * vy) || 1;
         grindT += (grindSpeed * dt) / railLen;
@@ -1531,67 +1724,91 @@ function update() {
                 player.body.allowGravity = true;
                 player.setVelocityX(grindDir.x * (grindSpeed + 300));
                 player.setVelocityY(-700);
-                playRollSfx(); stylePoints += 150;
+                playRollSfx(); 
+                addStylePoints(150, "GRACEFUL EXIT"); // Graceful Exit Combo
                 addFlow(0.5);
             }
         }
         syncBody(player);
     }
 
-    // --- WALL STICK & JUMP MECHANICS ---
+    // --- WALL STICK & JUMP / CLIMB MECHANICS ---
     const hitLeft = player.body.blocked.left;
     const hitRight = player.body.blocked.right;
+    const isPushingAway = (hitLeft && (keys.D.isDown || mobileKeys.D)) || (hitRight && (keys.A.isDown || mobileKeys.A));
 
     // 1. Determine Wall Stick (Grabbing)
-    if (!isGrounded && player.body.velocity.y > 0 && !isSpinning && !inUpdraft) {
+    if (!isGrounded && !isSpinning && !inUpdraft) {
         if (hitLeft || hitRight) {
-            // Apply AUTO-MANTLE SETTING
-            if (gameSettings.autoMantle || keys.W.isDown || mobileKeys.W || keys.SPACE.isDown || mobileKeys.SPACE) {
-                isGrabbing = true;
-                player.body.allowGravity = false;
-                player.setVelocityY(100); // Slow AAA slide
-                player.setVelocityX(0);
-                player.setFlipX(hitLeft ? true : false); // Face the wall
+            // Only grab initially if falling (velocity.y >= 0). Once grabbed, stay grabbed.
+            if (!isGrabbing && player.body.velocity.y >= 0) {
+                if (gameSettings.autoMantle || keys.W.isDown || mobileKeys.W || keys.SPACE.isDown || mobileKeys.SPACE) {
+                    isGrabbing = true;
+                    hasAirDashed = false; // Reset air dash
+                    player.body.allowGravity = false;
+                    player.setVelocityX(0);
+                    player.setFlipX(hitLeft ? true : false); // Face the wall
+                }
+            }
+        } else {
+            if (isGrabbing) {
+                isGrabbing = false;
+                player.body.allowGravity = true;
+                if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
             }
         }
     } else if (isGrounded || (!hitLeft && !hitRight)) {
         if (isGrabbing) {
             isGrabbing = false;
             player.body.allowGravity = true;
+            if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
         }
     }
 
-    // Drop fast from grab
-    if (isGrabbing && (keys.S.isDown || mobileKeys.S)) {
-        isGrabbing = false; 
-        player.body.allowGravity = true;
-        player.setVelocityY(400);
+    // 2. Wall Climb Behavior while Grabbing
+    if (isGrabbing) {
+        // Drop fast from grab
+        if (keys.S.isDown || mobileKeys.S) {
+            isGrabbing = false; 
+            player.body.allowGravity = true;
+            player.setVelocityY(400);
+            if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
+        } else if (!isPushingAway && (keys.SPACE.isDown || mobileKeys.SPACE) && stamina > 0) {
+            // CLIMB UPWARD
+            player.setVelocityY(-250);
+            stamina = Math.max(0, stamina - 0.3);
+            if(player.texture.key !== 'climbing_sprite') player.setTexture('climbing_sprite');
+        } else {
+            // SLIDE DOWN SLOWLY
+            player.setVelocityY(100); // Slow AAA slide
+            if(player.texture.key !== 'humanoid') player.setTexture('humanoid');
+        }
     }
 
-    // 2. Jump Logic (Ground, Wall Hop, Spiral)
+    // 3. Jump Logic (Ground, Wall Hop, Spiral)
     if (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE) {
         if (isGrounded) {
             // Ground Jump
             player.setVelocityY(-800);
             this.tweens.add({ targets: player, scaleX: 0.7, scaleY: 1.3, duration: 100, yoyo: true, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
-        } else if (hitLeft || hitRight || isGrabbing) {
-            // Wall Jumps
-            const isPushingAway = (hitLeft && (keys.D.isDown || mobileKeys.D)) || (hitRight && (keys.A.isDown || mobileKeys.A));
-
-            if (isPushingAway && (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration)) {
+        } else if ((hitLeft || hitRight || isGrabbing) && isPushingAway) {
+            // Wall Jumps - REQUIRES PUSHING AWAY FROM WALL TO ACTIVATE (Allows space to be used for climbing otherwise)
+            if (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration) {
                 // AAA SPIRAL JUMP (A/D + Space off wall)
                 abilityCooldowns.spiral.last = performance.now();
                 const dir = hitLeft ? 1 : -1;
                 isGrabbing = false; player.body.allowGravity = true;
+                if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
                 player.setVelocityY(-950);
                 player.setVelocityX(dir * 800);
                 isSpinning = true;
                 this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onUpdate: () => syncBody(player), onComplete: () => { player.setAngle(0); isSpinning = false; syncBody(player); } });
-                playRollSfx(); stylePoints += 200;
+                playRollSfx(); addStylePoints(200, "SPIRAL JUMP");
                 addFlow(1.0);
             } else {
                 // Standard Wall Hop
                 isGrabbing = false; player.body.allowGravity = true;
+                if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
                 player.setVelocityY(-650);
                 player.setVelocityX(hitLeft ? 400 : -400);
                 addFlow(0.2);
@@ -1607,7 +1824,7 @@ function update() {
             player.setVelocityX(dir * 1100);
             this.tweens.add({ targets: player, scaleY: 0.4, scaleX: 1.6, duration: 100, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
             this.time.delayedCall(450, () => { if (isSliding) { isSliding = false; player.setScale(1); syncBody(player); } });
-            playSpeedSfx(); stylePoints += 25;
+            playSpeedSfx(); addStylePoints(25, "SLIDE");
             addFlow(0.5);
         } else {
             isDiving = true; stamina = Math.max(0, stamina - 10);
@@ -1623,7 +1840,7 @@ function update() {
 
     if (isSliding && (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE)) {
         isSliding = false; player.setScale(1); syncBody(player);
-        player.setVelocityY(-600); stylePoints += 75; 
+        player.setVelocityY(-600); addStylePoints(75, "DASH-CANCEL"); 
         addFlow(0.5);
     }
 
@@ -1667,10 +1884,13 @@ function update() {
     mobileJustDown.SPACE = false;
     mobileJustDown.CTRL = false;
     mobileJustDown.SHIFT = false;
+    mobileJustDown.A = false;
+    mobileJustDown.D = false;
 }
 
 function showRating() {
     document.getElementById('endless-ui').style.display = 'none';
+    document.getElementById('combo-ui').style.display = 'none';
     
     if (currentLevel === 99) {
         // Endless Mode Rating Screen
@@ -1701,7 +1921,7 @@ function showRating() {
         let starsEarned = [false, false, false];
 
         if (totalTime < 30) { document.getElementById('star1').classList.add('active'); starsEarned[0] = true; }
-        if (stylePoints > 500) { document.getElementById('star2').classList.add('active'); starsEarned[1] = true; }
+        if (stylePoints > 1500) { document.getElementById('star2').classList.add('active'); starsEarned[1] = true; } // Boosted style points threshold for combo update
         if (flowPercent > 80) { document.getElementById('star3').classList.add('active'); starsEarned[2] = true; }
         
         // Save Rating
