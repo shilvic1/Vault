@@ -184,12 +184,15 @@
             justify-content: center;
             color: #fff;
             font-family: 'Press Start 2P', cursive;
+            overflow-y: auto;
+            padding-bottom: 50px;
         }
         #level-selector h1 {
             color: #ff4500;
             text-shadow: 4px 4px #000;
             margin-bottom: 40px;
             font-size: 32px;
+            margin-top: 50px;
         }
         .level-list {
             display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;
@@ -204,6 +207,7 @@
             width: 320px;
             transition: 0.2s;
             box-shadow: 0 0 15px rgba(102, 204, 255, 0.1);
+            margin-bottom: 10px;
         }
         .level-card:hover {
             background: rgba(255,255,255,0.15);
@@ -312,6 +316,10 @@
         <div class="level-card" onclick="startLevel(3)">
             <h3>LEVEL 3<br><br>THE SKYWARD SPIRE</h3>
             <div class="menu-stars" id="menu-star-3"><span>★</span><span>★</span><span>★</span></div>
+        </div>
+        <div class="level-card" onclick="startLevel(4)">
+            <h3>LEVEL 4<br><br>THE KINETIC CORE</h3>
+            <div class="menu-stars" id="menu-star-4"><span>★</span><span>★</span><span>★</span></div>
         </div>
     </div>
 </div>
@@ -694,8 +702,8 @@ function showTutorial(message) {
 }
 
 function updateMenuStarsUI() {
-    let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false]};
-    for(let lvl = 1; lvl <= 3; lvl++) {
+    let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false], 4: [false,false,false]};
+    for(let lvl = 1; lvl <= 4; lvl++) {
         let starDiv = document.getElementById(`menu-star-${lvl}`);
         if(starDiv) {
             starDiv.innerHTML = stats[lvl].map(earned => `<span class="${earned ? 'earned' : ''}">★</span>`).join('');
@@ -733,6 +741,8 @@ function nextLevel() {
     let next = 0;
     if (currentLevel === 1) next = 2;
     else if (currentLevel === 2) next = 3;
+    else if (currentLevel === 3) next = 4;
+    else if (currentLevel === 4) next = 99;
     else if (currentLevel === 99) next = 99;
     sceneRef.scene.restart({ level: next });
 }
@@ -984,6 +994,7 @@ function create(data) {
     if (currentLevel === 1) bannerMsg = 'LEVEL 1 - THE FOUNDRY';
     else if (currentLevel === 2) bannerMsg = 'LEVEL 2 - THE NEON THRESHER';
     else if (currentLevel === 3) bannerMsg = 'LEVEL 3 - THE SKYWARD SPIRE';
+    else if (currentLevel === 4) bannerMsg = 'LEVEL 4 - THE KINETIC CORE';
     else if (currentLevel === 99) bannerMsg = 'SYNAPSE SYNC: ENDLESS';
     
     // Level Name Scroll - Typewriter Effect
@@ -1252,6 +1263,77 @@ function create(data) {
             zone.triggered = false;
             tutorialTriggerZones.add(zone);
         });
+    } else if (currentLevel === 4) {
+        // LEVEL 4: THE KINETIC CORE
+        checkpoint = { x: 200, y: 600 };
+        checkpoints.create(200, 600, 'flag_on');
+
+        // Section 1: The Induction Chamber (Start & Tutorial)
+        platforms.add(this.add.rectangle(400, 700, 800, 80, 0x1a1a1a)); // Platform A
+        
+        let tutZone = this.add.zone(400, 600, 200, 400);
+        this.physics.add.existing(tutZone, true);
+        tutZone.tutorialMsg = "USE SHIFT TO GENERATE KINETIC FLOW";
+        tutZone.triggered = false;
+        tutorialTriggerZones.add(tutZone);
+
+        // Obstacle: A low-hanging ceiling at { y: 620 } requiring a Slide
+        platforms.add(this.add.rectangle(400, 580, 800, 80, 0x333333)); // center y=580 means bottom at 620
+
+        // Section 2: The Rail Array (Mid-Section)
+        rails.push({ x1: 900, y1: 550, x2: 1300, y2: 450 });
+        rails.push({ x1: 1400, y1: 450, x2: 1800, y2: 450 });
+        const railG = this.add.graphics();
+        railG.lineStyle(6, 0x66ccff, 1);
+        rails.forEach(r => railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2)));
+
+        platforms.add(this.add.rectangle(1950, 500, 300, 40, 0x1a1a1a)); // Platform B
+
+        // Section 3: The Thermal Exhaust (Verticality)
+        let fanZone = this.add.zone(2300, 0, 400, 1000); 
+        this.physics.add.existing(fanZone);
+        fanZone.body.allowGravity = false;
+        updrafts.add(fanZone);
+
+        this.add.rectangle(2300, 500, 400, 10, 0x00ffff);
+        fanEmitters.push(this.add.particles(0, 0, 'pixel', {
+            x: { min: 2100, max: 2500 },
+            y: 1000,
+            speedY: { min: -600, max: -900 },
+            lifespan: 2000,
+            alpha: { start: 0.6, end: 0 },
+            scale: { min: 1, max: 4 },
+            blendMode: 'ADD'
+        }));
+
+        checkpoints.create(2500, -200, 'flag_off');
+
+        for(let sy=-200; sy<1000; sy+=40) {
+            let s1 = endlessSpikes.create(2280, sy, 'pixel'); s1.setDisplaySize(20, 20); s1.setTint(0xff0000);
+            let s2 = endlessSpikes.create(2720, sy, 'pixel'); s2.setDisplaySize(20, 20); s2.setTint(0xff0000);
+        }
+
+        // Section 4: The Core Descent (Finale)
+        let rampX = 2800;
+        let rampY = -100;
+        let rampW = 1200;
+        let rampAngle = 0.25;
+        let rampSteps = 60;
+        let stepW = rampW / rampSteps;
+        for (let i = 0; i < rampSteps; i++) {
+            let sx = (rampX - rampW/2) + (i * stepW) + stepW/2;
+            let sy = rampY + Math.tan(rampAngle) * ((i * stepW) - rampW/2);
+            platforms.add(this.add.rectangle(sx, sy, stepW + 4, 40, 0x1a1a1a));
+        }
+        let visRamp = this.add.rectangle(rampX, rampY, rampW, 40, 0x1a1a1a);
+        visRamp.setRotation(rampAngle);
+        
+        // Final Speed Tunnel Stretch
+        platforms.add(this.add.rectangle(4500, 840, 2000, 80, 0x1a1a1a)); 
+
+        finishLine = this.add.rectangle(5000, 800, 40, 400, 0xffffff);
+        this.physics.add.existing(finishLine, true);
+
     } else if (currentLevel === 99) {
         // ENDLESS MODE INITIALIZATION
         checkpoint = { x: 100, y: floorY - 100 };
@@ -1372,16 +1454,6 @@ function create(data) {
 
     // Colliders
     this.physics.add.collider(player, platforms, (p, plat) => {
-        // COMMENTED OUT TO FIX FALLING THROUGH GROUND (Using actual physics engine collisions now)
-        /*
-        if (plat && plat.body && p && p.body) {
-            const overlap = (p.body.y + p.body.height) - plat.body.y;
-            if (overlap > 0 && p.body.velocity.y >= 0) {
-                p.y -= (overlap + 1);
-                syncBody(p);
-            }
-        }
-        */
         if (p.body.wasTouching.none && p.body.touching.down) {
             lastLandedAt = performance.now();
             hasAirDashed = false; // RESET AIR DASH
@@ -1393,7 +1465,8 @@ function create(data) {
             }
 
             // REMOVED syncBody() calls here. Hitbox stays solid 32x48 while visual squashes!
-            this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true });
+            // INCREASED SQUASH FOR LANDING
+            this.tweens.add({ targets: p, scaleX: 1.8, scaleY: 0.3, duration: 120, yoyo: true, ease: 'Bounce.easeOut' });
             
             if (isDiving) {
                 isDiving = false; isRolling = true;
@@ -1406,8 +1479,9 @@ function create(data) {
                 p.body.setSize(32, 24);
                 p.body.setOffset(0, 24);
                 
+                // INCREASED SQUASH FOR ROLLING
                 this.tweens.add({ 
-                    targets: p, scaleY: 0.6, scaleX: 1.4, duration: 350, 
+                    targets: p, scaleY: 0.4, scaleX: 1.7, duration: 400, ease: 'Quad.easeOut', 
                     onComplete: () => { 
                         isRolling = false; 
                         p.setScale(1); 
@@ -1658,9 +1732,9 @@ function update() {
         }
     }
 
-    // --- UPDRAFT MECHANICS (Shared Lvl 3 & Endless) ---
+    // --- UPDRAFT MECHANICS (Shared Lvl 3, 4 & Endless) ---
     let inUpdraft = false;
-    if ((currentLevel === 3 || currentLevel === 99) && updrafts) {
+    if ((currentLevel === 3 || currentLevel === 4 || currentLevel === 99) && updrafts) {
         this.physics.overlap(player, updrafts, () => { inUpdraft = true; });
     }
 
@@ -1679,8 +1753,10 @@ function update() {
         if (!player.body.touching.down && (keys.SHIFT.isDown || mobileKeys.SHIFT) && player.body.velocity.y > 0) {
             if (!isGliding) isGliding = true;
             player.body.setGravityY(-1200); player.setDragX(30);
-        } else if (isGliding) {
-            isGliding = false; player.body.setGravityY(0); player.setDragX(0.01);
+        } else {
+            if (isGliding) isGliding = false;
+            player.body.setGravityY(0); 
+            player.setDragX(0.01);
         }
     }
 
@@ -1695,7 +1771,7 @@ function update() {
             player.setVelocityX(-1200);
             
             // Fixed Air Dash hit box integrity
-            this.tweens.add({ targets: player, scaleY: 0.5, scaleX: 1.5, duration: 150, yoyo: true });
+            this.tweens.add({ targets: player, scaleY: 0.3, scaleX: 2.0, duration: 180, yoyo: true, ease: 'Back.easeOut' });
             
             playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
             this.time.delayedCall(200, () => {
@@ -1716,7 +1792,7 @@ function update() {
             player.setVelocityX(1200);
             
             // Fixed Air Dash hit box integrity
-            this.tweens.add({ targets: player, scaleY: 0.5, scaleX: 1.5, duration: 150, yoyo: true });
+            this.tweens.add({ targets: player, scaleY: 0.3, scaleX: 2.0, duration: 180, yoyo: true, ease: 'Back.easeOut' });
             
             playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
             this.time.delayedCall(200, () => {
@@ -1918,7 +1994,7 @@ function update() {
             player.setVelocityY(-800);
             
             // Removed syncBody to protect hitbox integrity
-            this.tweens.add({ targets: player, scaleX: 0.7, scaleY: 1.3, duration: 100, yoyo: true });
+            this.tweens.add({ targets: player, scaleX: 0.4, scaleY: 1.8, duration: 140, yoyo: true, ease: 'Back.easeOut' });
         } else if ((hitLeft || hitRight || isGrabbing) && isPushingAway) {
             // Wall Jumps - REQUIRES PUSHING AWAY FROM WALL TO ACTIVATE (Allows space to be used for climbing otherwise)
             if (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration) {
@@ -1956,7 +2032,7 @@ function update() {
             player.body.setOffset(0, 24);
 
             this.tweens.add({ 
-                targets: player, scaleY: 0.4, scaleX: 1.6, duration: 100 
+                targets: player, scaleY: 0.25, scaleX: 2.0, duration: 120, ease: 'Back.easeOut' 
             });
             
             this.time.delayedCall(450, () => { 
@@ -2093,7 +2169,7 @@ function showRating() {
         });
         
         // Save Rating
-        let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false]};
+        let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false], 4: [false,false,false]};
         // Keep best stars
         for(let i=0; i<3; i++) {
             if(starsEarned[i]) stats[currentLevel][i] = true;
