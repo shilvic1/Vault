@@ -115,7 +115,7 @@
             box-shadow: 0 0 50px rgba(255, 69, 0, 0.5);
         }
 
-        .star { font-size: 40px; color: #444; transition: 0.3s; }
+        .star { font-size: 40px; color: #444; transition: text-shadow 0.3s, color 0.3s; display: inline-block;}
         .star.active { color: #ffd700; text-shadow: 0 0 10px #fff; }
         
         #stats-panel { font-size: 10px; text-align: left; margin: 20px 0; line-height: 1.8; }
@@ -264,6 +264,22 @@
             line-height: 1.6;
             white-space: pre-wrap;
         }
+        
+        #combo-bar-container {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        
+        #combo-bar-fill {
+            width: 100%;
+            height: 100%;
+            background: #ffd700;
+            transform-origin: right;
+            transition: transform 0.1s linear;
+        }
 
         .scanlines {
             position: absolute;
@@ -309,7 +325,10 @@
     <div id="flow-meter">FLOW: 1.0x</div>
 </div>
 
-<div id="combo-ui">COMBO x1.0</div>
+<div id="combo-ui">
+    <div id="combo-text">COMBO x1.0</div>
+    <div id="combo-bar-container"><div id="combo-bar-fill"></div></div>
+</div>
 
 <div id="ui-layer">
     <div class="stamina-bar-container" id="stamina-box">
@@ -410,9 +429,10 @@ function addStylePoints(basePoints, moveName) {
     comboTimer = comboDecayDelay; // Reset combo timer
 
     let comboUI = document.getElementById('combo-ui');
-    if (comboUI) {
+    let comboText = document.getElementById('combo-text');
+    if (comboUI && comboText) {
         comboUI.style.display = 'block';
-        comboUI.innerText = `COMBO x${comboMultiplier.toFixed(1)}\n${moveName}`;
+        comboText.innerText = `COMBO x${comboMultiplier.toFixed(1)}\n${moveName}`;
         gsap.killTweensOf(comboUI);
         gsap.fromTo(comboUI, { scale: 1.5 }, { scale: 1, duration: 0.2 });
     }
@@ -485,7 +505,7 @@ const game = new Phaser.Game(CONFIG);
 
 let player, keys, stamina = 100;
 let isSprinting = false, isSliding = false, isGrabbing = false, isDiving = false, isRolling = false;
-let trailEmitter, landEmitter, windEmitter, speedLines, grindEmitter;
+let trailEmitter, landEmitter, windEmitter, speedLines, grindEmitter, fallingStreamers;
 let staminaFill, staminaBox;
 let audioCtx, masterGain, masterFilter, musicOsc, musicGain;
 let lastSpeedSfx = 0, lastDroneTime = 0;
@@ -496,6 +516,7 @@ let levelZones = {};
 let checkpoint = { x: 200, y: 200 };
 let onRamp = false;
 let breathingInterval = null;
+let breathingTween = null;
 const baseMusicFreq = 110; // Hz for subtle drone
 
 // --- LEVEL VARIABLES ---
@@ -854,12 +875,15 @@ window.addEventListener('keydown', (e) => {
 function togglePause() {
     if (!sceneRef) return;
     isPaused = !isPaused;
+    const canvas = document.querySelector('canvas');
     if (isPaused) {
+        if(canvas) canvas.style.filter = 'blur(6px)'; // Pause Menu Blur effect
         sceneRef.scene.pause();
         sceneRef.physics.pause();
         document.getElementById('pause-screen').style.display = 'block';
         document.getElementById('options-screen').style.display = 'none';
     } else {
+        if(canvas) canvas.style.filter = 'none'; // Will be managed by update loop again
         sceneRef.scene.resume();
         sceneRef.physics.resume();
         document.getElementById('pause-screen').style.display = 'none';
@@ -956,12 +980,24 @@ function create(data) {
     }
 
     const banner = document.getElementById('level-banner');
-    if (currentLevel === 1) banner.innerText = 'LEVEL 1 - THE FOUNDRY';
-    else if (currentLevel === 2) banner.innerText = 'LEVEL 2 - THE NEON THRESHER';
-    else if (currentLevel === 3) banner.innerText = 'LEVEL 3 - THE SKYWARD SPIRE';
-    else if (currentLevel === 99) banner.innerText = 'SYNAPSE SYNC: ENDLESS';
+    let bannerMsg = '';
+    if (currentLevel === 1) bannerMsg = 'LEVEL 1 - THE FOUNDRY';
+    else if (currentLevel === 2) bannerMsg = 'LEVEL 2 - THE NEON THRESHER';
+    else if (currentLevel === 3) bannerMsg = 'LEVEL 3 - THE SKYWARD SPIRE';
+    else if (currentLevel === 99) bannerMsg = 'SYNAPSE SYNC: ENDLESS';
+    
+    // Level Name Scroll - Typewriter Effect
+    banner.innerText = '';
     banner.style.display = 'block';
     banner.style.opacity = 1;
+    
+    let bIdx = 0;
+    if(window.bannerInt) clearInterval(window.bannerInt);
+    window.bannerInt = setInterval(() => {
+        banner.innerText += bannerMsg.charAt(bIdx);
+        bIdx++;
+        if (bIdx >= bannerMsg.length) clearInterval(window.bannerInt);
+    }, 50);
     
     // Reset Globals
     startTime = performance.now();
@@ -1269,6 +1305,18 @@ function create(data) {
         emitting: false,
         blendMode: 'ADD'
     });
+    
+    // --- FALLING STREAMERS ---
+    fallingStreamers = this.add.particles(0, 0, 'pixel', {
+        speedY: { min: -500, max: -800 },
+        scaleY: { min: 4, max: 12 },
+        scaleX: { min: 0.5, max: 1 },
+        alpha: { start: 0.4, end: 0 },
+        tint: 0x66ccff,
+        lifespan: 300,
+        blendMode: 'ADD',
+        emitting: false
+    });
 
     controlsUI = document.getElementById('controls');
     if(!controlsUI) {
@@ -1295,6 +1343,24 @@ function create(data) {
     player.setDamping(true);
     player.setDragX(0.01);
     syncBody(player);
+    
+    // --- SET DEPTH TO FIX ENDLESS MODE RENDERING ORDER ---
+    player.setDepth(100);
+    trailEmitter.setDepth(99);
+    landEmitter.setDepth(101);
+    grindEmitter.setDepth(101);
+    fallingStreamers.setDepth(98);
+    
+    // --- IDLE BREATHING TWEEN ---
+    breathingTween = this.tweens.add({
+        targets: player,
+        scaleY: 1.02,
+        scaleX: 0.98,
+        duration: 800,
+        yoyo: true,
+        repeat: -1,
+        paused: true
+    });
 
     this.cameras.main.startFollow(player, true, 0.1, 0.1);
     this.cameras.main.setZoom(1.1 * gameSettings.resScale);
@@ -1302,9 +1368,12 @@ function create(data) {
 
     speedLines = this.add.graphics();
     speedLines.setScrollFactor(0);
+    speedLines.setDepth(110);
 
     // Colliders
     this.physics.add.collider(player, platforms, (p, plat) => {
+        // COMMENTED OUT TO FIX FALLING THROUGH GROUND (Using actual physics engine collisions now)
+        /*
         if (plat && plat.body && p && p.body) {
             const overlap = (p.body.y + p.body.height) - plat.body.y;
             if (overlap > 0 && p.body.velocity.y >= 0) {
@@ -1312,6 +1381,7 @@ function create(data) {
                 syncBody(p);
             }
         }
+        */
         if (p.body.wasTouching.none && p.body.touching.down) {
             lastLandedAt = performance.now();
             hasAirDashed = false; // RESET AIR DASH
@@ -1322,14 +1392,29 @@ function create(data) {
                 this.cameras.main.shake(150, 0.003 * gameSettings.camShake);
             }
 
-            this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true, onUpdate: () => syncBody(p), onComplete: () => syncBody(p) });
+            // REMOVED syncBody() calls here. Hitbox stays solid 32x48 while visual squashes!
+            this.tweens.add({ targets: p, scaleX: 1.4, scaleY: 0.6, duration: 80, yoyo: true });
+            
             if (isDiving) {
                 isDiving = false; isRolling = true;
                 const preserved = Phaser.Math.Clamp(Math.abs(p.body.velocity.x) * 0.95, 0, 1100);
                 const dir = p.flipX ? -1 : 1;
                 // If velocity is very low, snap to 0 to prevent sliding off tiny platforms
                 p.setVelocityX(preserved > 150 ? dir * preserved : 0);
-                this.tweens.add({ targets: p, scaleY: 0.6, scaleX: 1.4, duration: 350, onUpdate: () => syncBody(p), onComplete: () => { isRolling = false; p.setScale(1); syncBody(p); } });
+                
+                // Roll Hitbox Fix
+                p.body.setSize(32, 24);
+                p.body.setOffset(0, 24);
+                
+                this.tweens.add({ 
+                    targets: p, scaleY: 0.6, scaleX: 1.4, duration: 350, 
+                    onComplete: () => { 
+                        isRolling = false; 
+                        p.setScale(1); 
+                        p.body.setSize(32, 48); // Restore Hitbox
+                        p.body.setOffset(0, 0);
+                    } 
+                });
                 playRollSfx(); addStylePoints(50, "ROLL");
             } else { 
                 playLandSfx(); 
@@ -1399,9 +1484,13 @@ function update() {
     
     let dt = this.game.loop.delta / 1000;
 
-    // --- COMBO KING TIMER DECAY ---
+    // --- COMBO KING TIMER DECAY & BAR UPDATE ---
     if (comboMultiplier > 1.0) {
         comboTimer -= dt;
+        let comboFill = document.getElementById('combo-bar-fill');
+        if (comboFill) {
+            comboFill.style.transform = `scaleX(${Math.max(0, comboTimer / comboDecayDelay)})`;
+        }
         if (comboTimer <= 0) {
             resetCombo();
         }
@@ -1438,12 +1527,28 @@ function update() {
             wallSpeedTrigger.active = true;
         }
     }
+    
+    // FALLING STREAMERS UPDATE
+    if (player.body.velocity.y > 600 && !isGrabbing && !isGrinding) {
+        fallingStreamers.emitting = true;
+        fallingStreamers.setPosition(player.x + (Math.random() * 20 - 10), player.y - 20);
+    } else {
+        fallingStreamers.emitting = false;
+    }
 
     // --- LEVEL 99: ENDLESS MODE UPDATE LOGIC ---
     if (currentLevel === 99 && endlessVoidWall) {
-        // Track Distance
-        endlessDistance = Math.max(endlessDistance, Math.floor(player.x / 40));
-        document.getElementById('distance-meter').innerText = `DIST: ${endlessDistance}m`;
+        // Track Distance with Pulse Update
+        let newDist = Math.max(endlessDistance, Math.floor(player.x / 40));
+        if (newDist > endlessDistance) {
+            if (newDist > 0 && newDist % 500 === 0) {
+                let dMeter = document.getElementById('distance-meter');
+                gsap.killTweensOf(dMeter);
+                gsap.fromTo(dMeter, { scale: 1.5, color: '#00ff88' }, { scale: 1, color: '#ffffff', duration: 0.5 });
+            }
+            endlessDistance = newDist;
+            document.getElementById('distance-meter').innerText = `DIST: ${endlessDistance}m`;
+        }
         
         // Heat Level & Difficulty Scaling
         let previousHeat = heatLevel;
@@ -1588,7 +1693,10 @@ function update() {
             player.body.allowGravity = false;
             player.setVelocityY(0);
             player.setVelocityX(-1200);
+            
+            // Fixed Air Dash hit box integrity
             this.tweens.add({ targets: player, scaleY: 0.5, scaleX: 1.5, duration: 150, yoyo: true });
+            
             playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
             this.time.delayedCall(200, () => {
                 isAirDashing = false;
@@ -1606,7 +1714,10 @@ function update() {
             player.body.allowGravity = false;
             player.setVelocityY(0);
             player.setVelocityX(1200);
+            
+            // Fixed Air Dash hit box integrity
             this.tweens.add({ targets: player, scaleY: 0.5, scaleX: 1.5, duration: 150, yoyo: true });
+            
             playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
             this.time.delayedCall(200, () => {
                 isAirDashing = false;
@@ -1657,19 +1768,21 @@ function update() {
     const hue = (stamina / 100) * 120;
     staminaFill.style.backgroundColor = `hsl(${hue}, 100%, 50%)`;
 
+    // STAMINA BAR SHAKE WHEN EMPTY AND TRYING TO SPRINT
     if (isSprintIntent && stamina <= 0) {
-        gsap.to(staminaBox, { x: "+=3", duration: 0.05, yoyo: true, repeat: 3 });
+        gsap.to(staminaBox, { x: "+=6", duration: 0.05, yoyo: true, repeat: 3, clearProps: "x" });
     }
 
+    // SPRINT LEAN INJECTION & REGULAR MOVEMENT
     if (!isSliding && !isGrabbing && !isRolling && !isAirDashing) {
         if (keys.A.isDown || mobileKeys.A) {
             player.setAccelerationX(-acceleration);
             player.setFlipX(true);
-            player.setAngle(-8);
+            player.setAngle(isSprinting ? -12 : -8);
         } else if (keys.D.isDown || mobileKeys.D) {
             player.setAccelerationX(acceleration);
             player.setFlipX(false);
-            player.setAngle(8);
+            player.setAngle(isSprinting ? 12 : 8);
         } else {
             player.setAccelerationX(0);
             player.setDragX(0.0001);
@@ -1681,6 +1794,20 @@ function update() {
     player.setMaxVelocity(targetSpeed, maxVertical);
     
     maxVelocityReached = Math.max(maxVelocityReached, Math.abs(player.body.velocity.x));
+    
+    // IDLE BREATHING ANIMATION
+    let currentSpeed = Math.abs(player.body.velocity.x);
+    if (isGrounded && currentSpeed < 10 && !isSliding && !keys.S.isDown && !mobileKeys.S && !isDiving && !isRolling && !isSprinting) {
+        if (!breathingTween.isPlaying()) breathingTween.play();
+    } else {
+        if (breathingTween.isPlaying()) {
+            breathingTween.pause();
+            // Don't override scale if in a roll or slide
+            if (!isSliding && !isRolling && !isAirDashing) {
+                player.setScale(1);
+            }
+        }
+    }
 
     // RAIL GRIND
     if (!isGrinding) {
@@ -1729,7 +1856,6 @@ function update() {
                 addFlow(0.5);
             }
         }
-        syncBody(player);
     }
 
     // --- WALL STICK & JUMP / CLIMB MECHANICS ---
@@ -1790,7 +1916,9 @@ function update() {
         if (isGrounded) {
             // Ground Jump
             player.setVelocityY(-800);
-            this.tweens.add({ targets: player, scaleX: 0.7, scaleY: 1.3, duration: 100, yoyo: true, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
+            
+            // Removed syncBody to protect hitbox integrity
+            this.tweens.add({ targets: player, scaleX: 0.7, scaleY: 1.3, duration: 100, yoyo: true });
         } else if ((hitLeft || hitRight || isGrabbing) && isPushingAway) {
             // Wall Jumps - REQUIRES PUSHING AWAY FROM WALL TO ACTIVATE (Allows space to be used for climbing otherwise)
             if (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration) {
@@ -1802,7 +1930,7 @@ function update() {
                 player.setVelocityY(-950);
                 player.setVelocityX(dir * 800);
                 isSpinning = true;
-                this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onUpdate: () => syncBody(player), onComplete: () => { player.setAngle(0); isSpinning = false; syncBody(player); } });
+                this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onComplete: () => { player.setAngle(0); isSpinning = false; } });
                 playRollSfx(); addStylePoints(200, "SPIRAL JUMP");
                 addFlow(1.0);
             } else {
@@ -1822,8 +1950,25 @@ function update() {
             isSliding = true; stamina -= 20;
             const dir = player.flipX ? -1 : 1;
             player.setVelocityX(dir * 1100);
-            this.tweens.add({ targets: player, scaleY: 0.4, scaleX: 1.6, duration: 100, onUpdate: () => syncBody(player), onComplete: () => syncBody(player) });
-            this.time.delayedCall(450, () => { if (isSliding) { isSliding = false; player.setScale(1); syncBody(player); } });
+            
+            // Set precise Hitbox for sliding
+            player.body.setSize(32, 24);
+            player.body.setOffset(0, 24);
+
+            this.tweens.add({ 
+                targets: player, scaleY: 0.4, scaleX: 1.6, duration: 100 
+            });
+            
+            this.time.delayedCall(450, () => { 
+                if (isSliding) { 
+                    isSliding = false; 
+                    player.setScale(1); 
+                    
+                    // Restore Hitbox
+                    player.body.setSize(32, 48);
+                    player.body.setOffset(0, 0); 
+                } 
+            });
             playSpeedSfx(); addStylePoints(25, "SLIDE");
             addFlow(0.5);
         } else {
@@ -1839,7 +1984,13 @@ function update() {
     }
 
     if (isSliding && (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE)) {
-        isSliding = false; player.setScale(1); syncBody(player);
+        isSliding = false; 
+        player.setScale(1); 
+        
+        // Restore Hitbox
+        player.body.setSize(32, 48);
+        player.body.setOffset(0, 0);
+        
         player.setVelocityY(-600); addStylePoints(75, "DASH-CANCEL"); 
         addFlow(0.5);
     }
@@ -1920,9 +2071,26 @@ function showRating() {
         
         let starsEarned = [false, false, false];
 
-        if (totalTime < 30) { document.getElementById('star1').classList.add('active'); starsEarned[0] = true; }
-        if (stylePoints > 1500) { document.getElementById('star2').classList.add('active'); starsEarned[1] = true; } // Boosted style points threshold for combo update
-        if (flowPercent > 80) { document.getElementById('star3').classList.add('active'); starsEarned[2] = true; }
+        if (totalTime < 30) starsEarned[0] = true;
+        if (stylePoints > 1500) starsEarned[1] = true; 
+        if (flowPercent > 80) starsEarned[2] = true;
+        
+        // RATING STAR POP ANIMATION
+        [1, 2, 3].forEach(i => {
+            let star = document.getElementById('star' + i);
+            star.classList.remove('active');
+            star.style.opacity = '0';
+            star.style.transform = 'scale(0)';
+            if (starsEarned[i-1]) {
+                gsap.to(star, {
+                    scale: 1, opacity: 1, duration: 0.6,
+                    delay: i * 0.3, ease: "back.out(2)",
+                    onStart: () => star.classList.add('active')
+                });
+            } else {
+                gsap.to(star, { scale: 1, opacity: 0.3, duration: 0.4, delay: i * 0.3 });
+            }
+        });
         
         // Save Rating
         let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false]};
