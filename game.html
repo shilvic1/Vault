@@ -321,6 +321,10 @@
             <h3>LEVEL 4<br><br>THE KINETIC CORE</h3>
             <div class="menu-stars" id="menu-star-4"><span>★</span><span>★</span><span>★</span></div>
         </div>
+        <div class="level-card" onclick="startLevel(5)">
+            <h3>LEVEL 5<br><br>THE OVERDRIVE NETWORK</h3>
+            <div class="menu-stars" id="menu-star-5"><span>★</span><span>★</span><span>★</span></div>
+        </div>
     </div>
 </div>
 
@@ -538,7 +542,7 @@ let finishLine;
 let tutorialTriggerZones;
 let tutorialTextElement;
 
-// --- LEVEL 2 VARIABLES ---
+// --- LEVEL 2 / 5 VARIABLES ---
 let speedingWall;
 let wallSpeed = 250;
 let hidingSpots;
@@ -702,8 +706,8 @@ function showTutorial(message) {
 }
 
 function updateMenuStarsUI() {
-    let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false], 4: [false,false,false]};
-    for(let lvl = 1; lvl <= 4; lvl++) {
+    let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false], 4: [false,false,false], 5: [false,false,false]};
+    for(let lvl = 1; lvl <= 5; lvl++) {
         let starDiv = document.getElementById(`menu-star-${lvl}`);
         if(starDiv) {
             starDiv.innerHTML = stats[lvl].map(earned => `<span class="${earned ? 'earned' : ''}">★</span>`).join('');
@@ -742,17 +746,18 @@ function nextLevel() {
     if (currentLevel === 1) next = 2;
     else if (currentLevel === 2) next = 3;
     else if (currentLevel === 3) next = 4;
-    else if (currentLevel === 4) next = 99;
+    else if (currentLevel === 4) next = 5;
+    else if (currentLevel === 5) next = 99;
     else if (currentLevel === 99) next = 99;
     sceneRef.scene.restart({ level: next });
 }
 
 // ENDLESS FLOW ADDITION
 function addFlow(amount) {
-    if(currentLevel !== 99) return;
+    if(currentLevel !== 99 && currentLevel !== 5) return;
     flowMultiplier = Math.min(10.0, flowMultiplier + amount);
     let fmUI = document.getElementById('flow-meter');
-    if(fmUI) {
+    if(fmUI && currentLevel === 99) {
         fmUI.innerText = `FLOW: ${flowMultiplier.toFixed(1)}x`;
         gsap.fromTo(fmUI, {scale: 1.5, color: '#ffffff'}, {scale: 1, color: '#00ff88', duration: 0.3});
     }
@@ -912,9 +917,9 @@ function respawnPlayer() {
     player.setVelocity(0, 0);
     stamina = 100;
     resetCombo(); // Reset combo on respawn
-    if(currentLevel === 2 && speedingWall) {
+    if((currentLevel === 2 || currentLevel === 5) && speedingWall) {
         speedingWall.x = checkpoint.x - 1000;
-        wallSpeed = 250;
+        wallSpeed = currentLevel === 5 ? 360 : 250;
         if(wallSpeedTrigger) wallSpeedTrigger.active = true;
     }
 }
@@ -995,6 +1000,7 @@ function create(data) {
     else if (currentLevel === 2) bannerMsg = 'LEVEL 2 - THE NEON THRESHER';
     else if (currentLevel === 3) bannerMsg = 'LEVEL 3 - THE SKYWARD SPIRE';
     else if (currentLevel === 4) bannerMsg = 'LEVEL 4 - THE KINETIC CORE';
+    else if (currentLevel === 5) bannerMsg = 'LEVEL 5 - THE OVERDRIVE NETWORK';
     else if (currentLevel === 99) bannerMsg = 'SYNAPSE SYNC: ENDLESS';
     
     // Level Name Scroll - Typewriter Effect
@@ -1334,6 +1340,79 @@ function create(data) {
         finishLine = this.add.rectangle(5000, 800, 40, 400, 0xffffff);
         this.physics.add.existing(finishLine, true);
 
+    } else if (currentLevel === 5) {
+        // LEVEL 5: THE OVERDRIVE NETWORK
+        checkpoint = { x: 100, y: floorY - 100 };
+        checkpoints.create(100, floorY - 60, 'flag_on');
+
+        // Zone 1: The Input Buffer
+        wallSpeed = 360;
+        speedingWall = this.add.rectangle(-800, floorY - 300, 40, 800, 0xff0000);
+        this.physics.add.existing(speedingWall);
+        speedingWall.body.allowGravity = false;
+
+        platforms.add(this.add.rectangle(1250, floorY, 2500, 80, 0x1a1a1a)); // The Squeeze base
+        platforms.add(this.add.rectangle(1250, floorY - 80, 2500, 40, 0x333333)); // The Squeeze ceiling
+
+        for(let sx = 50; sx <= 2450; sx += 40) {
+            let s = endlessSpikes.create(sx, floorY - 55, 'pixel');
+            s.setDisplaySize(20, 20); s.setTint(0xff0000); s.setFlipY(true);
+        }
+
+        // End of Zone 1 - Safe Spot
+        platforms.add(this.add.rectangle(2650, floorY, 300, 80, 0x1a1a1a));
+        checkpoints.create(2550, floorY - 60, 'flag_off');
+        let hs = this.add.rectangle(2650, floorY - 60, 100, 120, 0x222222);
+        this.physics.add.existing(hs, true);
+        hidingSpots.add(hs);
+
+        // Zone 2: The Switching Hub
+        let rx = 2900;
+        let ry = floorY - 150;
+        for (let i = 0; i < 12; i++) {
+            rails.push({ x1: rx, y1: ry, x2: rx + 150, y2: ry });
+            rx += 220; // 150 rail + 70 gap
+            ry -= 90;
+        }
+        const railG = this.add.graphics();
+        railG.lineStyle(6, 0x66ccff, 1);
+        rails.forEach(r => railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2)));
+
+        // Landing after rails
+        let endRailX = rx;
+        let endRailY = ry;
+        platforms.add(this.add.rectangle(endRailX + 200, endRailY + 50, 400, 80, 0x1a1a1a));
+        checkpoints.create(endRailX + 100, endRailY - 10, 'flag_off');
+
+        // Zone 3: The Data Stream
+        let fanZ = this.add.zone(endRailX + 1200, endRailY - 300, 400, 1500); 
+        this.physics.add.existing(fanZ);
+        fanZ.body.allowGravity = false;
+        updrafts.add(fanZ);
+
+        this.add.rectangle(endRailX + 1200, endRailY + 300, 400, 10, 0x00ffff);
+        fanEmitters.push(this.add.particles(0, 0, 'pixel', {
+            x: { min: endRailX + 1000, max: endRailX + 1400 },
+            y: endRailY + 300,
+            speedY: { min: -600, max: -1000 },
+            lifespan: 2000,
+            alpha: { start: 0.6, end: 0 },
+            scale: { min: 1, max: 4 },
+            blendMode: 'ADD'
+        }));
+
+        platforms.add(this.add.rectangle(endRailX + 2300, endRailY - 200, 1000, 80, 0x1a1a1a));
+
+        finishLine = this.add.rectangle(7500, 600, 40, 400, 0x00ff88);
+        this.physics.add.existing(finishLine, true);
+        this.tweens.add({
+            targets: finishLine,
+            alpha: 0.2,
+            duration: 100,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Stepped'
+        });
     } else if (currentLevel === 99) {
         // ENDLESS MODE INITIALIZATION
         checkpoint = { x: 100, y: floorY - 100 };
@@ -1507,7 +1586,10 @@ function create(data) {
     
     if (endlessSpikes) {
         this.physics.add.overlap(player, endlessSpikes, (p, spike) => {
-            if(stamina > 0) {
+            if (currentLevel === 5 && spike.y < player.y) {
+                // Instant death if hitting ceiling spikes in Lvl 5
+                respawnPlayer();
+            } else if(stamina > 0) {
                 stamina = 0;
                 flowMultiplier = 1.0;
                 this.cameras.main.flash(200, 255, 0, 0);
@@ -1595,10 +1677,10 @@ function update() {
         player.setVelocity(0, 0);
         stamina = 100;
         resetCombo();
-        if(currentLevel === 2 && speedingWall) {
+        if((currentLevel === 2 || currentLevel === 5) && speedingWall) {
             speedingWall.x = checkpoint.x - 1000;
-            wallSpeed = 250;
-            wallSpeedTrigger.active = true;
+            wallSpeed = currentLevel === 5 ? 360 : 250;
+            if(wallSpeedTrigger) wallSpeedTrigger.active = true;
         }
     }
     
@@ -1681,8 +1763,8 @@ function update() {
     }
 
 
-    // --- LEVEL 2: THRESHER MECHANICS ---
-    if (currentLevel === 2 && speedingWall) {
+    // --- LEVEL 2 & 5: THRESHER MECHANICS ---
+    if ((currentLevel === 2 || currentLevel === 5) && speedingWall) {
         speedingWall.x += wallSpeed * dt;
         
         isHidden = false;
@@ -1700,8 +1782,8 @@ function update() {
             player.setPosition(checkpoint.x, checkpoint.y);
             player.setVelocity(0, 0);
             speedingWall.x = checkpoint.x - 1000;
-            wallSpeed = 250;
-            wallSpeedTrigger.active = true;
+            wallSpeed = currentLevel === 5 ? 360 : 250;
+            if (wallSpeedTrigger) wallSpeedTrigger.active = true;
             stamina = 100;
             playRollSfx();
             this.cameras.main.flash(500, 255, 0, 0);
@@ -1732,9 +1814,9 @@ function update() {
         }
     }
 
-    // --- UPDRAFT MECHANICS (Shared Lvl 3, 4 & Endless) ---
+    // --- UPDRAFT MECHANICS (Shared Lvl 3, 4, 5 & Endless) ---
     let inUpdraft = false;
-    if ((currentLevel === 3 || currentLevel === 4 || currentLevel === 99) && updrafts) {
+    if ((currentLevel === 3 || currentLevel === 4 || currentLevel === 5 || currentLevel === 99) && updrafts) {
         this.physics.overlap(player, updrafts, () => { inUpdraft = true; });
     }
 
@@ -1903,6 +1985,12 @@ function update() {
                     player.body.setVelocity(0, 0);
                     addStylePoints(100, "GRIND");
                     addFlow(1.0);
+                    
+                    // LEVEL 5 CUSTOM SHAKE LOGIC
+                    if (currentLevel === 5 && gameSettings.camShake > 0) {
+                        this.cameras.main.shake(100, 0.005 * flowMultiplier * gameSettings.camShake);
+                    }
+                    
                     break;
                 }
             }
@@ -2169,7 +2257,7 @@ function showRating() {
         });
         
         // Save Rating
-        let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false], 4: [false,false,false]};
+        let stats = JSON.parse(localStorage.getItem('vaultStats')) || {1: [false,false,false], 2: [false,false,false], 3: [false,false,false], 4: [false,false,false], 5: [false,false,false]};
         // Keep best stars
         for(let i=0; i<3; i++) {
             if(starsEarned[i]) stats[currentLevel][i] = true;
