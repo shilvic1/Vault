@@ -19,6 +19,24 @@
             display: none; /* Hidden on menu */
         }
 
+        #rage-bar-container {
+            width: 200px;
+            height: 4px;
+            background: rgba(255, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            margin-bottom: 4px;
+            overflow: hidden;
+            display: none; /* Only visible in rage mode */
+        }
+
+        #rage-fill {
+            width: 0%;
+            height: 100%;
+            background: #ffffff;
+            transform-origin: left;
+            transition: width 0.1s ease, background-color 0.2s ease;
+        }
+
         .stamina-bar-container {
             width: 200px;
             height: 10px;
@@ -181,7 +199,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
             color: #fff;
             font-family: 'Press Start 2P', cursive;
             overflow-y: auto;
@@ -304,7 +322,7 @@
 
 <div id="level-selector">
     <h1>VAULT</h1>
-    <div class="level-list">
+    <div class="level-list" id="main-level-list">
         <div class="level-card" onclick="startLevel(1)">
             <h3>LEVEL 1<br><br>THE FOUNDRY</h3>
             <div class="menu-stars" id="menu-star-1"><span>★</span><span>★</span><span>★</span></div>
@@ -343,6 +361,9 @@
 </div>
 
 <div id="ui-layer">
+    <div id="rage-bar-container">
+        <div id="rage-fill"></div>
+    </div>
     <div class="stamina-bar-container" id="stamina-box">
         <div id="stamina-fill"></div>
     </div>
@@ -419,6 +440,23 @@
 // --- URL MODE DETECTION ---
 const urlParams = new URLSearchParams(window.location.search);
 const isEndlessMode = urlParams.get('mode') === 'endless' || urlParams.get('gamemode') === 'endless';
+const isRageGamemode = urlParams.get('gamemode') === 'rage' || urlParams.get('mode') === 'rage';
+
+// --- MENU INJECTION FOR RAGE LEVELS ---
+document.addEventListener('DOMContentLoaded', () => {
+    loadSettings();
+    if (isRageGamemode) {
+        const list = document.getElementById('main-level-list');
+        let rageHtml = `<div style="width: 100%; text-align: center; margin-top: 40px; margin-bottom: 20px; color: #ff0000; text-shadow: 2px 2px #fff;"><h2 style="font-size:24px; margin:0;">RAGE MODE</h2><p style="font-size:10px; color:#ddd; margin-top:10px;">ONE MISTAKE. NO CHECKPOINTS. ASCEND.</p></div>`;
+        for(let i=1; i<=10; i++) {
+            rageHtml += `
+            <div class="level-card" style="border-color: #ff0000; box-shadow: 0 0 15px rgba(255,0,0,0.2);" onclick="startLevel(${100+i})">
+                <h3 style="color:#ff4500; font-size:16px;">RAGE ${i}<br><br>THE ASCENT</h3>
+            </div>`;
+        }
+        list.innerHTML += rageHtml;
+    }
+});
 
 // --- VIRTUAL KEY STATE FOR MOBILE ---
 let mobileKeys = { A: false, D: false, SPACE: false, CTRL: false, SHIFT: false, S: false, W: false };
@@ -429,6 +467,13 @@ let lastTapA = 0;
 let lastTapD = 0;
 let hasAirDashed = false;
 let isAirDashing = false;
+
+// --- RAGE GAMEMODE VARIABLES ---
+let rageValue = 0;
+let isRaging = false;
+let rageFlashDone = false;
+let enemies, jumpPads, portals;
+let isShipMode = false;
 
 // --- COMBO KING SYSTEM ---
 let comboMultiplier = 1.0;
@@ -499,8 +544,6 @@ function applySettings() {
     localStorage.setItem('vaultSettings', JSON.stringify(gameSettings));
 }
 
-document.addEventListener('DOMContentLoaded', loadSettings);
-
 const CONFIG = {
     type: Phaser.AUTO,
     width: window.innerWidth,
@@ -522,7 +565,7 @@ let staminaFill, staminaBox;
 let audioCtx, masterGain, masterFilter, musicOsc, musicGain;
 let lastSpeedSfx = 0, lastDroneTime = 0;
 let platforms, sceneRef;
-let currentLevel = 0; // 0 = Menu, 99 = Endless
+let currentLevel = 0; // 0 = Menu, 99 = Endless, 101-110 = Rage
 let levelObjects = [];
 let levelZones = {};
 let checkpoint = { x: 200, y: 200 };
@@ -749,6 +792,7 @@ function nextLevel() {
     else if (currentLevel === 4) next = 5;
     else if (currentLevel === 5) next = 99;
     else if (currentLevel === 99) next = 99;
+    else if (currentLevel >= 101 && currentLevel < 110) next = currentLevel + 1;
     sceneRef.scene.restart({ level: next });
 }
 
@@ -917,6 +961,15 @@ function respawnPlayer() {
     player.setVelocity(0, 0);
     stamina = 100;
     resetCombo(); // Reset combo on respawn
+    
+    // Reset Rage logic
+    rageValue = 0;
+    isRaging = false;
+    isShipMode = false;
+    rageFlashDone = false;
+    let rFill = document.getElementById('rage-fill');
+    if (rFill) { rFill.style.width = '0%'; rFill.style.background = '#ffffff'; }
+
     if((currentLevel === 2 || currentLevel === 5) && speedingWall) {
         speedingWall.x = checkpoint.x - 1000;
         wallSpeed = currentLevel === 5 ? 360 : 250;
@@ -936,7 +989,7 @@ function closeOptions() {
 
 function quitToMenu() {
     resumeGame();
-    if(isEndlessMode || currentLevel === 99) {
+    if(isEndlessMode || currentLevel === 99 || isRageGamemode) {
         window.location.href = window.location.pathname; // Remove query
     } else {
         window.location.href = 'index.html';
@@ -972,6 +1025,7 @@ function create(data) {
         document.getElementById('level-selector').style.display = 'flex';
         document.getElementById('ui-layer').style.display = 'none';
         document.getElementById('endless-ui').style.display = 'none';
+        document.getElementById('rage-bar-container').style.display = 'none';
         if(controlsUI) controlsUI.style.display = 'none';
         if(mui) mui.style.display = 'none';
         updateMenuStarsUI();
@@ -989,6 +1043,12 @@ function create(data) {
         document.getElementById('endless-ui').style.display = 'none';
     }
 
+    if (isRageGamemode || currentLevel > 100) {
+        document.getElementById('rage-bar-container').style.display = 'block';
+    } else {
+        document.getElementById('rage-bar-container').style.display = 'none';
+    }
+
     // Show mobile UI if touch was previously detected and not manually hidden
     if (mui && mui.getAttribute('data-hidden') !== 'true' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
         mui.style.display = 'block';
@@ -1002,6 +1062,7 @@ function create(data) {
     else if (currentLevel === 4) bannerMsg = 'LEVEL 4 - THE KINETIC CORE';
     else if (currentLevel === 5) bannerMsg = 'LEVEL 5 - THE OVERDRIVE NETWORK';
     else if (currentLevel === 99) bannerMsg = 'SYNAPSE SYNC: ENDLESS';
+    else if (currentLevel > 100 && currentLevel <= 110) bannerMsg = `RAGE LEVEL ${currentLevel - 100} - THE ASCENT`;
     
     // Level Name Scroll - Typewriter Effect
     banner.innerText = '';
@@ -1024,6 +1085,13 @@ function create(data) {
     resetCombo(); // Initialize combo metrics
     maxVelocityReached = 0;
     stamina = 100;
+    rageValue = 0;
+    isRaging = false;
+    isShipMode = false;
+    rageFlashDone = false;
+    let rFill = document.getElementById('rage-fill');
+    if (rFill) { rFill.style.width = '0%'; rFill.style.background = '#ffffff'; }
+
     sprintToggled = false;
     isGrinding = false;
     isSprinting = false; 
@@ -1066,6 +1134,11 @@ function create(data) {
     hidingSpots = this.physics.add.staticGroup();
     endlessSpikes = this.physics.add.staticGroup();
     updrafts = this.physics.add.group({ allowGravity: false, immovable: true });
+    
+    // RAGE MODE GROUPS
+    enemies = this.physics.add.staticGroup();
+    jumpPads = this.physics.add.staticGroup();
+    portals = this.physics.add.staticGroup();
 
     const { width, height } = this.scale;
     const floorY = height - 40;
@@ -1436,6 +1509,54 @@ function create(data) {
         spawnEndlessChunk(floorY);
         spawnEndlessChunk(floorY);
         spawnEndlessChunk(floorY);
+    } else if (currentLevel >= 101 && currentLevel <= 110) {
+        // --- 10 RAGE LEVELS: VERTICAL GENERATION ---
+        let rageIdx = currentLevel - 100;
+        checkpoint = { x: 400, y: floorY - 100 };
+        // NO CHECKPOINTS CREATED! Back to start on mistake.
+
+        platforms.add(this.add.rectangle(400, floorY, 800, 80, 0x1a1a1a));
+
+        let currentY = floorY - 200;
+        let currentX = 400;
+
+        // Height scales heavily with level index (1500 to 15000px high)
+        let heightGoal = rageIdx * 1500; 
+
+        while(currentY > floorY - heightGoal) {
+            // Randomly place platform
+            currentX += (Math.random() * 600 - 300);
+            currentX = Phaser.Math.Clamp(currentX, -1000, 2000);
+
+            let platW = Math.random() * 200 + 100;
+            platforms.add(this.add.rectangle(currentX, currentY, platW, 20, 0x333333));
+
+            // 20% chance jump pad
+            if (Math.random() < 0.2) {
+                let jp = jumpPads.create(currentX, currentY - 20, 'pixel');
+                jp.setDisplaySize(40, 10);
+                jp.setTint(0x00ff00);
+            }
+            // 20% chance enemy
+            else if (Math.random() < 0.2) {
+                let en = enemies.create(currentX + (Math.random()*platW - platW/2), currentY - 20, 'pixel');
+                en.setDisplaySize(20, 20);
+                en.setTint(0xff0000);
+            }
+            // 10% chance GD portal (Ship mode toggle)
+            else if (Math.random() < 0.1) {
+                let po = portals.create(currentX, currentY - 60, 'pixel');
+                po.setDisplaySize(20, 80);
+                po.setTint(0xaa00ff);
+                po.triggered = false;
+            }
+
+            currentY -= (Math.random() * 150 + 100); // Progress upwards
+        }
+
+        // Finish line at the top
+        finishLine = this.add.rectangle(currentX, currentY, 200, 40, 0xffffff);
+        this.physics.add.existing(finishLine, true);
     }
 
     // AMBIENT VISUALS
@@ -1525,7 +1646,7 @@ function create(data) {
 
     this.cameras.main.startFollow(player, true, 0.1, 0.1);
     this.cameras.main.setZoom(1.1 * gameSettings.resScale);
-    this.cameras.main.setBounds(0, -3000, 1000000, height + 3000); // Massive bounds for endless
+    this.cameras.main.setBounds(-5000, -100000, 100000, 100000 + height); // Massive bounds for vertical/endless
 
     speedLines = this.add.graphics();
     speedLines.setScrollFactor(0);
@@ -1583,6 +1704,35 @@ function create(data) {
     if (movingPlatforms) {
         this.physics.add.collider(player, movingPlatforms);
     }
+
+    // RAGE MODE PHYSICS
+    if (jumpPads) {
+        this.physics.add.collider(player, jumpPads, (p, jp) => {
+            if (p.body.touching.down && p.body.velocity.y >= 0) {
+                p.setVelocityY(-1400);
+                playRollSfx();
+                addStylePoints(50, "BOUNCE");
+            }
+        });
+    }
+
+    if (enemies) {
+        this.physics.add.overlap(player, enemies, () => {
+            respawnPlayer();
+            this.cameras.main.flash(200, 255, 0, 0);
+        });
+    }
+
+    if (portals) {
+        this.physics.add.overlap(player, portals, (p, port) => {
+            if (!port.triggered) {
+                isShipMode = !isShipMode;
+                port.triggered = true;
+                this.cameras.main.flash(100, 170, 0, 255);
+                this.time.delayedCall(1000, () => { port.triggered = false; }); // prevent immediate double trigger
+            }
+        });
+    }
     
     if (endlessSpikes) {
         this.physics.add.overlap(player, endlessSpikes, (p, spike) => {
@@ -1622,7 +1772,7 @@ function create(data) {
         });
     }
 
-    keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,CTRL,SPACE');
+    keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,CTRL,SPACE,R');
 
     // Fade banner
     this.tweens.add({
@@ -1658,11 +1808,11 @@ function update() {
     const btnSprintUI = document.getElementById('btn-sprint');
     
     if (btnSlideUI) {
-        btnSlideUI.innerText = (!isGrounded && !isSliding) ? "DIVE" : "SLIDE";
+        btnSlideUI.innerText = (!isGrounded && !isSliding && !isShipMode) ? "DIVE" : "SLIDE";
         btnSlideUI.style.borderColor = (!isGrounded && !isSliding) ? "#ff4500" : "rgba(102, 204, 255, 0.5)";
     }
     if (btnSprintUI) {
-        btnSprintUI.innerText = (!isGrounded) ? "GLIDE" : "SPRINT";
+        btnSprintUI.innerText = (!isGrounded && !isShipMode) ? "GLIDE" : "SPRINT";
     }
 
     // Reset if falling out of world
@@ -1677,6 +1827,15 @@ function update() {
         player.setVelocity(0, 0);
         stamina = 100;
         resetCombo();
+        
+        // Reset Rage modes
+        rageValue = 0;
+        isRaging = false;
+        isShipMode = false;
+        rageFlashDone = false;
+        let rFill = document.getElementById('rage-fill');
+        if (rFill) { rFill.style.width = '0%'; rFill.style.background = '#ffffff'; }
+
         if((currentLevel === 2 || currentLevel === 5) && speedingWall) {
             speedingWall.x = checkpoint.x - 1000;
             wallSpeed = currentLevel === 5 ? 360 : 250;
@@ -1685,7 +1844,7 @@ function update() {
     }
     
     // FALLING STREAMERS UPDATE
-    if (player.body.velocity.y > 600 && !isGrabbing && !isGrinding) {
+    if (player.body.velocity.y > 600 && !isGrabbing && !isGrinding && !isShipMode) {
         fallingStreamers.emitting = true;
         fallingStreamers.setPosition(player.x + (Math.random() * 20 - 10), player.y - 20);
     } else {
@@ -1820,7 +1979,7 @@ function update() {
         this.physics.overlap(player, updrafts, () => { inUpdraft = true; });
     }
 
-    if (inUpdraft) {
+    if (inUpdraft && !isShipMode) {
         if (keys.SHIFT.isDown || mobileKeys.SHIFT) {
             isGliding = true;
             player.body.setGravityY(-2800); // Strong lift
@@ -1831,7 +1990,7 @@ function update() {
             player.body.setGravityY(-1500); // Neutralize gravity mostly
             player.body.velocity.y -= 15;
         }
-    } else {
+    } else if (!isShipMode) {
         if (!player.body.touching.down && (keys.SHIFT.isDown || mobileKeys.SHIFT) && player.body.velocity.y > 0) {
             if (!isGliding) isGliding = true;
             player.body.setGravityY(-1200); player.setDragX(30);
@@ -1843,51 +2002,94 @@ function update() {
     }
 
     // --- DOUBLE-TAP AIR DASH MECHANIC ---
-    if (Phaser.Input.Keyboard.JustDown(keys.A) || mobileJustDown.A) {
-        if (performance.now() - lastTapA < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
-            hasAirDashed = true;
-            isAirDashing = true;
-            stamina -= 10;
-            player.body.allowGravity = false;
-            player.setVelocityY(0);
-            player.setVelocityX(-1200);
-            
-            // Fixed Air Dash hit box integrity
-            this.tweens.add({ targets: player, scaleY: 0.3, scaleX: 2.0, duration: 180, yoyo: true, ease: 'Back.easeOut' });
-            
-            playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
-            this.time.delayedCall(200, () => {
-                isAirDashing = false;
-                if (!isGrabbing && !isGliding) player.body.allowGravity = true;
-            });
+    if (!isShipMode) {
+        if (Phaser.Input.Keyboard.JustDown(keys.A) || mobileJustDown.A) {
+            if (performance.now() - lastTapA < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
+                hasAirDashed = true;
+                isAirDashing = true;
+                stamina -= 10;
+                player.body.allowGravity = false;
+                player.setVelocityY(0);
+                player.setVelocityX(-1200);
+                
+                // Fixed Air Dash hit box integrity
+                this.tweens.add({ targets: player, scaleY: 0.3, scaleX: 2.0, duration: 180, yoyo: true, ease: 'Back.easeOut' });
+                
+                playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
+                this.time.delayedCall(200, () => {
+                    isAirDashing = false;
+                    if (!isGrabbing && !isGliding && !isShipMode) player.body.allowGravity = true;
+                });
+            }
+            lastTapA = performance.now();
         }
-        lastTapA = performance.now();
-    }
-    
-    if (Phaser.Input.Keyboard.JustDown(keys.D) || mobileJustDown.D) {
-        if (performance.now() - lastTapD < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
-            hasAirDashed = true;
-            isAirDashing = true;
-            stamina -= 10;
-            player.body.allowGravity = false;
-            player.setVelocityY(0);
-            player.setVelocityX(1200);
-            
-            // Fixed Air Dash hit box integrity
-            this.tweens.add({ targets: player, scaleY: 0.3, scaleX: 2.0, duration: 180, yoyo: true, ease: 'Back.easeOut' });
-            
-            playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
-            this.time.delayedCall(200, () => {
-                isAirDashing = false;
-                if (!isGrabbing && !isGliding) player.body.allowGravity = true;
-            });
+        
+        if (Phaser.Input.Keyboard.JustDown(keys.D) || mobileJustDown.D) {
+            if (performance.now() - lastTapD < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
+                hasAirDashed = true;
+                isAirDashing = true;
+                stamina -= 10;
+                player.body.allowGravity = false;
+                player.setVelocityY(0);
+                player.setVelocityX(1200);
+                
+                // Fixed Air Dash hit box integrity
+                this.tweens.add({ targets: player, scaleY: 0.3, scaleX: 2.0, duration: 180, yoyo: true, ease: 'Back.easeOut' });
+                
+                playSpeedSfx(); addStylePoints(50, "AIR DASH"); addFlow(0.5);
+                this.time.delayedCall(200, () => {
+                    isAirDashing = false;
+                    if (!isGrabbing && !isGliding && !isShipMode) player.body.allowGravity = true;
+                });
+            }
+            lastTapD = performance.now();
         }
-        lastTapD = performance.now();
     }
 
+    // --- RAGE MECHANICS LOGIC ---
+    let targetSpeed = 350;
+    
+    if (isRageGamemode || currentLevel > 100) {
+        let speedX = Math.abs(player.body.velocity.x);
+        
+        if (!isRaging && speedX > 600) {
+            rageValue += (speedX / 1000) * dt * 8; // Fill speed dependent on velocity
+            if (rageValue >= 100) {
+                rageValue = 100;
+                if (!rageFlashDone) {
+                    this.cameras.main.flash(300, 255, 255, 255);
+                    rageFlashDone = true;
+                }
+            }
+        } else if (speedX <= 600 && !isRaging) {
+            rageValue = Math.max(0, rageValue - 2 * dt);
+        }
+
+        if (rageValue >= 100 && (Phaser.Input.Keyboard.JustDown(keys.R))) {
+            isRaging = true;
+            rageFlashDone = false;
+            this.cameras.main.flash(500, 255, 0, 0); // Red flash
+            document.getElementById('rage-fill').style.background = '#ff0000';
+            playSpeedSfx(); playDiveSfx();
+        }
+
+        if (isRaging) {
+            rageValue -= 15 * dt; // Lasts ~6.6 seconds
+            targetSpeed += 600; // Unstable speed boost
+            stamina = 100; // Infinite stamina while raging
+            if (rageValue <= 0) {
+                rageValue = 0;
+                isRaging = false;
+                document.getElementById('rage-fill').style.background = '#ffffff';
+            }
+        }
+
+        let rFill = document.getElementById('rage-fill');
+        if (rFill) rFill.style.width = Math.min(100, Math.max(0, rageValue)) + '%';
+    }
 
     // --- MOVEMENT ---
-    let baseMovementSpeed = 350;
+    let baseMovementSpeed = targetSpeed;
     if (currentLevel === 99) {
         if (heatLevel === 2) baseMovementSpeed = 500;
         if (heatLevel === 3) baseMovementSpeed = 600;
@@ -1896,7 +2098,7 @@ function update() {
         this.physics.world.gravity.y = heatLevel === 4 ? 1980 : 1800;
     }
     
-    let targetSpeed = baseMovementSpeed + (flowMultiplier * 10);
+    targetSpeed = baseMovementSpeed + (flowMultiplier * 10);
     let acceleration = 3000;
 
     // SPRINT TOGGLE LOGIC INTEGRATION
@@ -1909,11 +2111,11 @@ function update() {
         sprintToggled = false;
     }
 
-    if (isSprintIntent && stamina > 0 && !isSliding) {
+    if (isSprintIntent && stamina > 0 && !isSliding && !isShipMode) {
         isSprinting = true;
         targetSpeed = Math.max(650, targetSpeed + 300);
         stamina = Math.max(0, stamina - 0.7);
-    } else {
+    } else if (!isRaging) { // recharge only if not infinite
         isSprinting = false;
         let rechargeRate = (currentLevel === 99 && heatLevel >= 3) ? 0.32 : 0.4;
         stamina = Math.min(100, stamina + rechargeRate);
@@ -1927,12 +2129,12 @@ function update() {
     staminaFill.style.backgroundColor = `hsl(${hue}, 100%, 50%)`;
 
     // STAMINA BAR SHAKE WHEN EMPTY AND TRYING TO SPRINT
-    if (isSprintIntent && stamina <= 0) {
+    if (isSprintIntent && stamina <= 0 && !isRaging) {
         gsap.to(staminaBox, { x: "+=6", duration: 0.05, yoyo: true, repeat: 3, clearProps: "x" });
     }
 
     // SPRINT LEAN INJECTION & REGULAR MOVEMENT
-    if (!isSliding && !isGrabbing && !isRolling && !isAirDashing) {
+    if (!isSliding && !isGrabbing && !isRolling && !isAirDashing && !isShipMode) {
         if (keys.A.isDown || mobileKeys.A) {
             player.setAccelerationX(-acceleration);
             player.setFlipX(true);
@@ -1948,14 +2150,41 @@ function update() {
         }
     }
 
-    const maxVertical = isDiving ? 2500 : (isGliding ? 500 : 1200);
+    // --- SHIP MODE (Geometry Dash Style) ---
+    if (isShipMode) {
+        player.body.allowGravity = true;
+        player.body.setGravityY(-1800); // Negate default 1800
+        
+        if (keys.SPACE.isDown || mobileKeys.SPACE) {
+            player.body.velocity.y -= 4000 * dt;
+        } else {
+            player.body.velocity.y += 2500 * dt;
+        }
+        
+        // Ship horizontal movement
+        if (keys.A.isDown || mobileKeys.A) {
+            player.setAccelerationX(-acceleration);
+            player.setFlipX(true);
+        } else if (keys.D.isDown || mobileKeys.D) {
+            player.setAccelerationX(acceleration);
+            player.setFlipX(false);
+        } else {
+            player.setAccelerationX(0);
+            player.setDragX(0.0001);
+        }
+
+        player.body.velocity.y = Phaser.Math.Clamp(player.body.velocity.y, -800, 800);
+        player.setAngle(player.body.velocity.y * (player.flipX ? -0.05 : 0.05));
+    }
+
+    const maxVertical = isShipMode ? 800 : (isDiving ? 2500 : (isGliding ? 500 : 1200));
     player.setMaxVelocity(targetSpeed, maxVertical);
     
     maxVelocityReached = Math.max(maxVelocityReached, Math.abs(player.body.velocity.x));
     
     // IDLE BREATHING ANIMATION
     let currentSpeed = Math.abs(player.body.velocity.x);
-    if (isGrounded && currentSpeed < 10 && !isSliding && !keys.S.isDown && !mobileKeys.S && !isDiving && !isRolling && !isSprinting) {
+    if (isGrounded && currentSpeed < 10 && !isSliding && !keys.S.isDown && !mobileKeys.S && !isDiving && !isRolling && !isSprinting && !isShipMode) {
         if (!breathingTween.isPlaying()) breathingTween.play();
     } else {
         if (breathingTween.isPlaying()) {
@@ -1970,7 +2199,7 @@ function update() {
     // RAIL GRIND
     if (!isGrinding) {
         grindEmitter.emitting = false;
-        if (Math.abs(player.body.velocity.x) > 280 && rails && rails.length) {
+        if (!isShipMode && Math.abs(player.body.velocity.x) > 280 && rails && rails.length) {
             for (let r of rails) {
                 const res = pointLineClosest(r, player.x, player.y);
                 if (res.dist < 20) {
@@ -2027,137 +2256,139 @@ function update() {
     const hitRight = player.body.blocked.right;
     const isPushingAway = (hitLeft && (keys.D.isDown || mobileKeys.D)) || (hitRight && (keys.A.isDown || mobileKeys.A));
 
-    // 1. Determine Wall Stick (Grabbing)
-    if (!isGrounded && !isSpinning && !inUpdraft) {
-        if (hitLeft || hitRight) {
-            // Only grab initially if falling (velocity.y >= 0). Once grabbed, stay grabbed.
-            if (!isGrabbing && player.body.velocity.y >= 0) {
-                if (gameSettings.autoMantle || keys.W.isDown || mobileKeys.W || keys.SPACE.isDown || mobileKeys.SPACE) {
-                    isGrabbing = true;
-                    hasAirDashed = false; // Reset air dash
-                    player.body.allowGravity = false;
-                    player.setVelocityX(0);
-                    player.setFlipX(hitLeft ? true : false); // Face the wall
+    if (!isShipMode) {
+        // 1. Determine Wall Stick (Grabbing)
+        if (!isGrounded && !isSpinning && !inUpdraft) {
+            if (hitLeft || hitRight) {
+                // Only grab initially if falling (velocity.y >= 0). Once grabbed, stay grabbed.
+                if (!isGrabbing && player.body.velocity.y >= 0) {
+                    if (gameSettings.autoMantle || keys.W.isDown || mobileKeys.W || keys.SPACE.isDown || mobileKeys.SPACE) {
+                        isGrabbing = true;
+                        hasAirDashed = false; // Reset air dash
+                        player.body.allowGravity = false;
+                        player.setVelocityX(0);
+                        player.setFlipX(hitLeft ? true : false); // Face the wall
+                    }
+                }
+            } else {
+                if (isGrabbing) {
+                    isGrabbing = false;
+                    player.body.allowGravity = true;
+                    if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
                 }
             }
-        } else {
+        } else if (isGrounded || (!hitLeft && !hitRight)) {
             if (isGrabbing) {
                 isGrabbing = false;
                 player.body.allowGravity = true;
                 if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
             }
         }
-    } else if (isGrounded || (!hitLeft && !hitRight)) {
+
+        // 2. Wall Climb Behavior while Grabbing
         if (isGrabbing) {
-            isGrabbing = false;
-            player.body.allowGravity = true;
-            if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
-        }
-    }
-
-    // 2. Wall Climb Behavior while Grabbing
-    if (isGrabbing) {
-        // Drop fast from grab
-        if (keys.S.isDown || mobileKeys.S) {
-            isGrabbing = false; 
-            player.body.allowGravity = true;
-            player.setVelocityY(400);
-            if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
-        } else if (!isPushingAway && (keys.SPACE.isDown || mobileKeys.SPACE) && stamina > 0) {
-            // CLIMB UPWARD
-            player.setVelocityY(-250);
-            stamina = Math.max(0, stamina - 0.3);
-            if(player.texture.key !== 'climbing_sprite') player.setTexture('climbing_sprite');
-        } else {
-            // SLIDE DOWN SLOWLY
-            player.setVelocityY(100); // Slow AAA slide
-            if(player.texture.key !== 'humanoid') player.setTexture('humanoid');
-        }
-    }
-
-    // 3. Jump Logic (Ground, Wall Hop, Spiral)
-    if (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE) {
-        if (isGrounded) {
-            // Ground Jump
-            player.setVelocityY(-800);
-            
-            // Removed syncBody to protect hitbox integrity
-            this.tweens.add({ targets: player, scaleX: 0.4, scaleY: 1.8, duration: 140, yoyo: true, ease: 'Back.easeOut' });
-        } else if ((hitLeft || hitRight || isGrabbing) && isPushingAway) {
-            // Wall Jumps - REQUIRES PUSHING AWAY FROM WALL TO ACTIVATE (Allows space to be used for climbing otherwise)
-            if (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration) {
-                // AAA SPIRAL JUMP (A/D + Space off wall)
-                abilityCooldowns.spiral.last = performance.now();
-                const dir = hitLeft ? 1 : -1;
-                isGrabbing = false; player.body.allowGravity = true;
+            // Drop fast from grab
+            if (keys.S.isDown || mobileKeys.S) {
+                isGrabbing = false; 
+                player.body.allowGravity = true;
+                player.setVelocityY(400);
                 if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
-                player.setVelocityY(-950);
-                player.setVelocityX(dir * 800);
-                isSpinning = true;
-                this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onComplete: () => { player.setAngle(0); isSpinning = false; } });
-                playRollSfx(); addStylePoints(200, "SPIRAL JUMP");
-                addFlow(1.0);
+            } else if (!isPushingAway && (keys.SPACE.isDown || mobileKeys.SPACE) && stamina > 0) {
+                // CLIMB UPWARD
+                player.setVelocityY(-250);
+                stamina = Math.max(0, stamina - 0.3);
+                if(player.texture.key !== 'climbing_sprite') player.setTexture('climbing_sprite');
             } else {
-                // Standard Wall Hop
-                isGrabbing = false; player.body.allowGravity = true;
-                if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
-                player.setVelocityY(-650);
-                player.setVelocityX(hitLeft ? 400 : -400);
-                addFlow(0.2);
+                // SLIDE DOWN SLOWLY
+                player.setVelocityY(100); // Slow AAA slide
+                if(player.texture.key !== 'humanoid') player.setTexture('humanoid');
             }
         }
-    }
 
-    // SLIDE / DIVE
-    if ((Phaser.Input.Keyboard.JustDown(keys.CTRL) || mobileJustDown.CTRL) && !isSliding && !isDiving && !isRolling && stamina > 10) {
-        if (isGrounded) {
-            isSliding = true; stamina -= 20;
-            const dir = player.flipX ? -1 : 1;
-            player.setVelocityX(dir * 1100);
-            
-            // Set precise Hitbox for sliding
-            player.body.setSize(32, 24);
-            player.body.setOffset(0, 24);
+        // 3. Jump Logic (Ground, Wall Hop, Spiral)
+        if (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE) {
+            if (isGrounded) {
+                // Ground Jump
+                player.setVelocityY(-800);
+                
+                // Removed syncBody to protect hitbox integrity
+                this.tweens.add({ targets: player, scaleX: 0.4, scaleY: 1.8, duration: 140, yoyo: true, ease: 'Back.easeOut' });
+            } else if ((hitLeft || hitRight || isGrabbing) && isPushingAway) {
+                // Wall Jumps - REQUIRES PUSHING AWAY FROM WALL TO ACTIVATE (Allows space to be used for climbing otherwise)
+                if (performance.now() - abilityCooldowns.spiral.last >= abilityCooldowns.spiral.duration) {
+                    // AAA SPIRAL JUMP (A/D + Space off wall)
+                    abilityCooldowns.spiral.last = performance.now();
+                    const dir = hitLeft ? 1 : -1;
+                    isGrabbing = false; player.body.allowGravity = true;
+                    if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
+                    player.setVelocityY(-950);
+                    player.setVelocityX(dir * 800);
+                    isSpinning = true;
+                    this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onComplete: () => { player.setAngle(0); isSpinning = false; } });
+                    playRollSfx(); addStylePoints(200, "SPIRAL JUMP");
+                    addFlow(1.0);
+                } else {
+                    // Standard Wall Hop
+                    isGrabbing = false; player.body.allowGravity = true;
+                    if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
+                    player.setVelocityY(-650);
+                    player.setVelocityX(hitLeft ? 400 : -400);
+                    addFlow(0.2);
+                }
+            }
+        }
 
-            this.tweens.add({ 
-                targets: player, scaleY: 0.25, scaleX: 2.0, duration: 120, ease: 'Back.easeOut' 
-            });
+        // SLIDE / DIVE
+        if ((Phaser.Input.Keyboard.JustDown(keys.CTRL) || mobileJustDown.CTRL) && !isSliding && !isDiving && !isRolling && stamina > 10) {
+            if (isGrounded) {
+                isSliding = true; stamina -= 20;
+                const dir = player.flipX ? -1 : 1;
+                player.setVelocityX(dir * 1100);
+                
+                // Set precise Hitbox for sliding
+                player.body.setSize(32, 24);
+                player.body.setOffset(0, 24);
+
+                this.tweens.add({ 
+                    targets: player, scaleY: 0.25, scaleX: 2.0, duration: 120, ease: 'Back.easeOut' 
+                });
+                
+                this.time.delayedCall(450, () => { 
+                    if (isSliding) { 
+                        isSliding = false; 
+                        player.setScale(1); 
+                        
+                        // Restore Hitbox
+                        player.body.setSize(32, 48);
+                        player.body.setOffset(0, 0); 
+                    } 
+                });
+                playSpeedSfx(); addStylePoints(25, "SLIDE");
+                addFlow(0.5);
+            } else {
+                isDiving = true; stamina = Math.max(0, stamina - 10);
+                const dir = player.flipX ? -1 : 1;
+                player.setVelocityX(dir * 600); 
+                player.setVelocityY(1500); // Accelerated Mega-Drop dive
+                player.body.allowGravity = true;
+                this.tweens.add({ targets: player, angle: dir * -30, duration: 200 });
+                playDiveSfx();
+                addFlow(0.5);
+            }
+        }
+
+        if (isSliding && (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE)) {
+            isSliding = false; 
+            player.setScale(1); 
             
-            this.time.delayedCall(450, () => { 
-                if (isSliding) { 
-                    isSliding = false; 
-                    player.setScale(1); 
-                    
-                    // Restore Hitbox
-                    player.body.setSize(32, 48);
-                    player.body.setOffset(0, 0); 
-                } 
-            });
-            playSpeedSfx(); addStylePoints(25, "SLIDE");
-            addFlow(0.5);
-        } else {
-            isDiving = true; stamina = Math.max(0, stamina - 10);
-            const dir = player.flipX ? -1 : 1;
-            player.setVelocityX(dir * 600); 
-            player.setVelocityY(1500); // Accelerated Mega-Drop dive
-            player.body.allowGravity = true;
-            this.tweens.add({ targets: player, angle: dir * -30, duration: 200 });
-            playDiveSfx();
+            // Restore Hitbox
+            player.body.setSize(32, 48);
+            player.body.setOffset(0, 0);
+            
+            player.setVelocityY(-600); addStylePoints(75, "DASH-CANCEL"); 
             addFlow(0.5);
         }
-    }
-
-    if (isSliding && (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE)) {
-        isSliding = false; 
-        player.setScale(1); 
-        
-        // Restore Hitbox
-        player.body.setSize(32, 48);
-        player.body.setOffset(0, 0);
-        
-        player.setVelocityY(-600); addStylePoints(75, "DASH-CANCEL"); 
-        addFlow(0.5);
-    }
+    } // End if(!isShipMode)
 
     if (Math.abs(player.body.velocity.x) > 400 || isSliding || isDiving) {
         trailEmitter.emitParticleAt(player.x, player.y);
@@ -2175,10 +2406,12 @@ function update() {
     setCd(cdSpiral, abilityCooldowns.spiral.last, abilityCooldowns.spiral.duration);
     setCd(cdGlide, abilityCooldowns.glide.last, abilityCooldowns.glide.duration);
 
-    if (intensity > 0.02 || (currentLevel === 99 && heatLevel === 4)) {
+    if (intensity > 0.02 || (currentLevel === 99 && heatLevel === 4) || isRaging) {
         speedLines.clear();
         let finalIntensity = (currentLevel === 99 && heatLevel === 4) ? Math.max(0.2, intensity) : intensity;
-        speedLines.lineStyle(2, 0xffffff, 0.08 * finalIntensity);
+        if (isRaging) finalIntensity = Math.max(0.4, intensity);
+        
+        speedLines.lineStyle(2, isRaging ? 0xff0000 : 0xffffff, 0.08 * finalIntensity);
         for (let i = 0; i < 12; i++) {
             const sx = Math.random() * this.scale.width, sy = Math.random() * this.scale.height;
             speedLines.strokeLineShape(new Phaser.Geom.Line(sx, sy, sx + (player.body.velocity.x * 0.1), sy));
@@ -2206,6 +2439,7 @@ function update() {
 function showRating() {
     document.getElementById('endless-ui').style.display = 'none';
     document.getElementById('combo-ui').style.display = 'none';
+    document.getElementById('rage-bar-container').style.display = 'none';
     
     if (currentLevel === 99) {
         // Endless Mode Rating Screen
@@ -2222,6 +2456,23 @@ function showRating() {
         
         document.getElementById('star-row').style.display = 'none';
         document.getElementById('next-lvl-btn').style.display = 'none';
+
+    } else if (currentLevel >= 101 && currentLevel <= 110) {
+        // Rage Level Rating Screen
+        const totalTime = ((endTime - startTime) / 1000).toFixed(2);
+        
+        document.getElementById('rating-title').innerText = "ASCENSION COMPLETE";
+        document.getElementById('stat-time').innerText = `TIME: ${totalTime}s`;
+        document.getElementById('stat-style').innerText = `STYLE: ${stylePoints}`;
+        document.getElementById('stat-flow').innerText = `RAGE CONQUERED`;
+        
+        document.getElementById('star-row').style.display = 'none';
+        let nxtBtn = document.getElementById('next-lvl-btn');
+        if (currentLevel < 110) {
+            nxtBtn.style.display = 'inline-block';
+        } else {
+            nxtBtn.style.display = 'none'; // Reached max rage level
+        }
 
     } else {
         // Standard Level Rating Screen
@@ -2240,6 +2491,9 @@ function showRating() {
         if (flowPercent > 80) starsEarned[2] = true;
         
         // RATING STAR POP ANIMATION
+        document.getElementById('star-row').style.display = 'block';
+        document.getElementById('next-lvl-btn').style.display = 'inline-block';
+        
         [1, 2, 3].forEach(i => {
             let star = document.getElementById('star' + i);
             star.classList.remove('active');
