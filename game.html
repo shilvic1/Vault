@@ -440,7 +440,7 @@
 // --- URL MODE DETECTION ---
 const urlParams = new URLSearchParams(window.location.search);
 const isEndlessMode = urlParams.get('mode') === 'endless' || urlParams.get('gamemode') === 'endless';
-const isRageGamemode = urlParams.get('gamemode') === 'rage' || urlParams.get('mode') === 'rage';
+const isRageGamemode = urlParams.get('mode') === 'rage' || urlParams.get('mode') === 'rage';
 
 // --- MENU INJECTION FOR RAGE LEVELS ---
 document.addEventListener('DOMContentLoaded', () => {
