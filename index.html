@@ -33,7 +33,6 @@
       overflow: hidden;
     }
 
-    /* FULLSCREEN PIXEL CITY BACKGROUND */
     #bg {
       position: fixed;
       top: 0;
@@ -204,7 +203,7 @@
     }
 
     .modes { display: flex; gap: 8px; }
-    .modes button { flex: 1; padding: 10px; font-size: 9px; }
+    .modes button { flex: 1; padding: 10px; font-size: 8px; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -260,9 +259,9 @@
     <div class="column">
       <div class="title">CREATE ROOM</div>
       <div class="modes">
-        <button class="btn secondary modeBtn" data-mode="1v1">1v1</button>
-        <button class="btn secondary modeBtn" data-mode="2v2">2v2</button>
-        <button class="btn secondary modeBtn" data-mode="4v4">4v4</button>
+        <button class="btn secondary modeBtn" data-mode="2p">2 PLAYER</button>
+        <button class="btn secondary modeBtn" data-mode="3p">3 PLAYER</button>
+        <button class="btn secondary modeBtn" data-mode="4p">4 PLAYER</button>
       </div>
       <div class="room-id" id="roomDisplay">ROOM-XXXXXXX</div>
       <button class="btn secondary" id="copyBtn">Copy ID</button>
@@ -290,6 +289,7 @@
 </div>
 
 <script>
+  // --- BACKGROUND ANIMATION ---
   const canvas = document.getElementById('bg');
   const ctx = canvas.getContext('2d');
   let buildings = [];
@@ -346,6 +346,7 @@
   window.addEventListener('resize', resize);
   resize(); draw();
 
+  // --- NAVIGATION ---
   document.getElementById('playBtn').onclick = () => {
     document.getElementById('mainMenu').style.display = 'none';
     document.getElementById('modeSelection').style.display = 'flex';
@@ -361,21 +362,30 @@
     location.href = `game.html?gamemode=${mode}&user=${user}`;
   }
 
+  // --- MULTIPLAYER LOGIC ---
   const onlineOverlay = document.getElementById("onlineOverlay");
-  let selectedMode = "1v1";
+  let selectedPlayers = "2p"; // Default selected mode
 
   document.getElementById("onlineBtn").onclick = () => onlineOverlay.style.display = "flex";
   document.getElementById("closeOnline").onclick = () => onlineOverlay.style.display = "none";
 
-  document.querySelectorAll(".modeBtn").forEach(btn => {
+  // Mode Selection logic
+  const modeBtns = document.querySelectorAll(".modeBtn");
+  modeBtns.forEach(btn => {
     btn.onclick = () => {
-      selectedMode = btn.dataset.mode;
-      document.querySelectorAll(".modeBtn").forEach(b => {
-          b.style.background = "transparent"; b.style.color = "var(--accent)";
+      selectedPlayers = btn.dataset.mode;
+      modeBtns.forEach(b => {
+          b.style.background = "var(--ui-white)"; 
+          b.style.color = "var(--accent)";
       });
-      btn.style.background = "var(--accent)"; btn.style.color = "#ffffff";
+      btn.style.background = "var(--accent)"; 
+      btn.style.color = "#ffffff";
     };
   });
+
+  // Initial UI state for first button
+  modeBtns[0].style.background = "var(--accent)";
+  modeBtns[0].style.color = "#ffffff";
 
   function generateRoom() {
     return "VAULT-" + Math.random().toString(36).substring(2, 9).toUpperCase();
@@ -390,7 +400,8 @@
 
   document.getElementById("startHost").onclick = () => {
     const user = document.getElementById('displayUsername').textContent;
-    location.href = `game.html?mode=online&role=host&team=${selectedMode}&room=${roomId}&user=${user}`;
+    // Redirect with player count logic
+    location.href = `game.html?mode=online&role=host&players=${selectedPlayers}&room=${roomId}&user=${user}`;
   };
 
   document.getElementById("joinBtn").onclick = () => {
@@ -400,6 +411,7 @@
     location.href = `game.html?mode=online&role=join&room=${room}&user=${user}`;
   };
 
+  // --- PROFILE/SETTINGS ---
   const optionsOverlay = document.getElementById("optionsOverlay");
   document.getElementById("optionsBtn").onclick = () => optionsOverlay.style.display = "flex";
   document.getElementById("closeOptions").onclick = () => optionsOverlay.style.display = "none";
