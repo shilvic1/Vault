@@ -6,6 +6,7 @@
     <title>Vault</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; padding: 0; background: #050505; overflow: hidden; }
@@ -389,6 +390,7 @@
     <h2>PAUSED</h2>
     <div class="btn-group-vertical">
         <button class="retry-btn" onclick="resumeGame()">RESUME</button>
+        <button class="retry-btn" id="practice-toggle-btn" onclick="togglePracticeMode()">PRACTICE MODE: OFF</button>
         <button class="retry-btn" onclick="respawnPlayer()">RESPAWN</button>
         <button class="retry-btn" onclick="restartLevel()">RESTART</button>
         <button class="retry-btn" onclick="showOptions()">OPTIONS</button>
@@ -437,6 +439,7 @@
 // --- URL MODE DETECTION ---
 const urlParams = new URLSearchParams(window.location.search);
 const isEndlessMode = urlParams.get('mode') === 'endless' || urlParams.get('gamemode') === 'endless';
+const isMultiplayerMode = urlParams.get('mode') === 'online' || urlParams.get('gamemode') === 'online';
 const isRageMode = urlParams.get('mode') === 'rage' || urlParams.get('gamemode') === 'rage';
 
 // --- VIRTUAL KEY STATE FOR MOBILE ---
@@ -479,6 +482,24 @@ function resetCombo() {
 let rageMeter = 0;
 let isRageActive = false;
 
+// --- MULTIPLAYER VARIABLES ---
+let peer;
+let peerConn; // For 1v1, this is the single connection. For N-player, this would be an array.
+let isHost = urlParams.get('role') === 'host';
+let netRoom = urlParams.get('room');
+let userName = urlParams.get('user') || 'GUEST_RUNNER';
+let remotePlayerSprite;
+let remotePlayerState = { x: 0, y: 0, flipX: false, isSliding: false, isGrabbing: false, isRolling: false, isDiving: false, isAirDashing: false };
+let multiplayerState = 'connecting'; // 'connecting', 'voting', 'waiting_start', 'racing', 'finished'
+let mapVotes = {}; // { mapId: count }
+let votingTimerInterval;
+let votingTimeRemaining = 30;
+let selectedRaceMap = null;
+let raceStartTime = 0;
+let raceFinishTime = 0;
+let raceFinishedPlayers = {}; // { peerId: time }
+let raceTimerInterval;
+
 // --- GAME SETTINGS ---
 let gameSettings = {
     toggleSprint: false,
@@ -486,10 +507,26 @@ let gameSettings = {
     camShake: 1.0,
     motionBlur: 0.0,
     resScale: 1.0,
-    fpsLimit: 0
+    fpsLimit: 0,
+    practiceMode: false
 };
 let sprintToggled = false;
 let isPaused = false;
+
+function togglePracticeMode() {
+    gameSettings.practiceMode = !gameSettings.practiceMode;
+    updatePracticeUI();
+    localStorage.setItem('vaultSettings', JSON.stringify(gameSettings));
+}
+
+function updatePracticeUI() {
+    const btn = document.getElementById('practice-toggle-btn');
+    if (btn) {
+        btn.innerText = `PRACTICE MODE: ${gameSettings.practiceMode ? 'ON' : 'OFF'}`;
+        btn.style.background = gameSettings.practiceMode ? '#00ff88' : '#ff4500';
+        btn.style.color = gameSettings.practiceMode ? '#000' : '#fff';
+    }
+}
 
 function loadSettings() {
     let saved = localStorage.getItem('vaultSettings');
@@ -501,6 +538,8 @@ function loadSettings() {
     document.getElementById('opt-blur').value = gameSettings.motionBlur;
     document.getElementById('opt-res').value = gameSettings.resScale;
     document.getElementById('opt-fps').value = gameSettings.fpsLimit;
+
+    updatePracticeUI();
 }
 
 function applySettings() {
@@ -529,6 +568,7 @@ const CONFIG = {
     width: window.innerWidth,
     height: window.innerHeight,
     backgroundColor: '#050505',
+    fps: { target: 60, forceSetTimeOut: true },
     physics: {
         default: 'arcade',
         arcade: { gravity: { y: 1800 }, debug: false }
@@ -540,8 +580,7 @@ const game = new Phaser.Game(CONFIG);
 
 let player, keys, stamina = 100;
 let isSprinting = false, isSliding = false, isGrabbing = false, isDiving = false, isRolling = false;
-let trailEmitter, landEmitter, windEmitter, speedLines, grindEmitter, fallingStreamers;
-let trailEmitter, landEmitter, windEmitter, speedLines, grindEmitter, fallingStreamers, rageEmitter;
+let trailEmitter, landEmitter, windEmitter, speedLines, grindEmitter, fallingStreamers, rageEmitter, ghostSprite;
 let staminaFill, staminaBox;
 let audioCtx, masterGain, masterFilter, musicOsc, musicGain;
 let lastSpeedSfx = 0, lastDroneTime = 0;
@@ -553,6 +592,7 @@ let checkpoint = { x: 200, y: 200 };
 let onRamp = false;
 let breathingInterval = null;
 let enemies, jumpPads;
+let recordingData = [], ghostData = [];
 let breathingTween = null;
 const baseMusicFreq = 110; // Hz for subtle drone
 
@@ -563,6 +603,7 @@ let maxVelocityReached = 0;
 let checkpoints;
 let finishLine;
 
+let raceHud, raceTimerDisplay, raceStatusDisplay;
 // --- TUTORIAL VARIABLES ---
 let tutorialTriggerZones;
 let tutorialTextElement;
@@ -795,6 +836,65 @@ function nextLevel() {
     sceneRef.scene.restart({ level: next });
 }
 
+// --- PRNG HELPER ---
+function mulberry32(a) {
+    return function() {
+      let t = a += 0x6D2B79F5;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+}
+
+function setRaceDifficulty(diff) {
+    if(!isHost) return;
+    raceDifficulty = diff;
+    document.querySelectorAll('.diff-btn').forEach(b => {
+        if(b.getAttribute('data-diff') === diff) {
+            b.style.background = 'white'; b.style.color = '#ff4500';
+        } else {
+            b.style.background = '#ff4500'; b.style.color = '#fff';
+        }
+    });
+}
+
+// --- MULTIPLAYER UI FUNCTIONS ---
+function showMultiplayerLoading(message) {
+    document.getElementById('multiplayer-loading-screen').style.display = 'flex';
+    document.getElementById('loading-status').innerText = message;
+}
+
+function hideMultiplayerLoading() {
+    document.getElementById('multiplayer-loading-screen').style.display = 'none';
+}
+
+function showMapVoting(maps) {
+    document.getElementById('map-voting-screen').style.display = 'flex';
+    const container = document.getElementById('voting-cards-container');
+    container.innerHTML = '';
+    if (isHost) document.getElementById('host-difficulty-selector').style.display = 'block';
+    maps.forEach(map => {
+        const card = document.createElement('div');
+        card.className = 'level-card';
+        card.innerHTML = `<h3>${map.name}</h3><p>${map.desc}</p><div class="menu-stars" id="vote-count-${map.id}">0 votes</div>`;
+        card.onclick = () => submitMapVote(map.id);
+        container.appendChild(card);
+    });
+    startVotingTimer();
+}
+
+function updateVotingUI() {
+    for (const mapId in mapVotes) {
+        const voteCountEl = document.getElementById(`vote-count-${mapId}`);
+        if (voteCountEl) {
+            voteCountEl.innerText = `${mapVotes[mapId]} votes`;
+        }
+    }
+}
+
+function hideMapVoting() {
+    document.getElementById('map-voting-screen').style.display = 'none';
+}
 // ENDLESS FLOW ADDITION
 function addFlow(amount) {
     if(currentLevel !== 99 && currentLevel !== 5) return;
@@ -940,6 +1040,7 @@ function togglePause() {
         sceneRef.physics.pause();
         document.getElementById('pause-screen').style.display = 'block';
         document.getElementById('options-screen').style.display = 'none';
+        updatePracticeUI();
     } else {
         if(canvas) canvas.style.filter = 'none'; // Will be managed by update loop again
         sceneRef.scene.resume();
@@ -989,21 +1090,16 @@ function quitToMenu() {
 function create(data) {
     sceneRef = this;
     
-    // URL Check injection
+    // URL Check injection for game modes
     if (isEndlessMode && typeof data.level === 'undefined') {
         currentLevel = 99; // Endless Trigger
-    } else {
-        if (isRageMode && (typeof data.level === 'undefined' || data.level === 0)) {
-            currentLevel = 101; // Start at first Rage Level
-        } else {
-            currentLevel = typeof data.level !== 'undefined' ? data.level : 0;
-        }
+    } else if (isRageMode && (typeof data.level === 'undefined' || data.level === 0)) {
+        currentLevel = 101;
+    } else if (isMultiplayerMode && (typeof data.level === 'undefined' || data.level === 0)) {
+        currentLevel = 100; // Multiplayer Race Trigger
+    } else if (typeof data.level !== 'undefined') {
+        currentLevel = data.level;
     }
-
-    if (typeof data.level !== 'undefined') {
-        currentLevel = typeof data.level !== 'undefined' ? data.level : 0;
-    }
-
     // PUSH URL TO ENDLESS STATE SO PAGE REFRESHES STAY IN ENDLESS MODE
     if (currentLevel === 99) {
         const url = new URL(window.location);
@@ -1011,6 +1107,12 @@ function create(data) {
         window.history.replaceState({}, '', url);
     }
     
+    // PUSH URL TO MULTIPLAYER STATE
+    if (currentLevel === 100) {
+        const url = new URL(window.location);
+        url.searchParams.set('mode', 'online');
+        window.history.replaceState({}, '', url);
+    }
     // UI Setup
     tutorialTextElement = document.getElementById('tutorial-text');
     staminaFill = document.getElementById('stamina-fill');
@@ -1022,6 +1124,9 @@ function create(data) {
     if (currentLevel === 0) {
         document.getElementById('level-selector').style.display = 'flex';
         document.getElementById('ui-layer').style.display = 'none';
+        document.getElementById('race-hud').style.display = 'none';
+        document.getElementById('race-results-screen').style.display = 'none';
+        document.getElementById('multiplayer-loading-screen').style.display = 'none';
         document.getElementById('endless-ui').style.display = 'none';
         if(controlsUI) controlsUI.style.display = 'none';
         if(mui) mui.style.display = 'none';
@@ -1032,6 +1137,8 @@ function create(data) {
     // Initialize UI for Play
     document.getElementById('level-selector').style.display = 'none';
     document.getElementById('ui-layer').style.display = 'block';
+    document.getElementById('race-hud').style.display = 'none';
+    document.getElementById('race-results-screen').style.display = 'none';
     if(controlsUI) controlsUI.style.display = 'block';
     
     if (currentLevel === 99) {
@@ -1064,10 +1171,16 @@ function create(data) {
     else if (currentLevel === 109) bannerMsg = 'RAGE 9: OVERCLOCK';
     else if (currentLevel === 110) bannerMsg = 'RAGE 10: THE FINAL VAULT';
     
+    if (currentLevel === 100) {
+        bannerMsg = 'MULTIPLAYER RACE';
+        document.getElementById('race-hud').style.display = 'block';
+    }
+
     // Level Name Scroll - Typewriter Effect
     banner.innerText = '';
     banner.style.display = 'block';
     banner.style.opacity = 1;
+    this.physics.world.gravity.y = 1800; // Reset gravity in case it was flipped in Level 106
     
     let bIdx = 0;
     if(window.bannerInt) clearInterval(window.bannerInt);
@@ -1094,13 +1207,24 @@ function create(data) {
     isGrabbing = false; 
     isDiving = false; 
     isRolling = false;
+    isAirDashing = false;
+    hasAirDashed = false;
+
+    isRolling = false;
+    isAirDashing = false;
+    hasAirDashed = false;
+
+    isRolling = false;
     hasAirDashed = false;
     isAirDashing = false;
     rails = [];
     updrafts = null;
     movingPlatforms = null;
     document.querySelectorAll('.star').forEach(s => s.classList.remove('active'));
-    document.getElementById('scanlines-overlay').style.opacity = currentLevel === 99 ? '1' : '0';
+
+    raceHud = document.getElementById('race-hud');
+    raceTimerDisplay = document.getElementById('race-timer');
+    raceStatusDisplay = document.getElementById('race-status');
     document.getElementById('scanlines-overlay').style.opacity = (currentLevel === 99 || isRageMode) ? '1' : '0';
 
     try {
@@ -1191,7 +1315,7 @@ function create(data) {
         checkpoint = { x: 100, y: floorY - 100 };
         checkpoints.create(100, floorY - 60, 'flag_on');
 
-        wallSpeed = 250;
+        wallSpeed = 160; // Even slower thresher
         speedingWall = this.add.rectangle(-800, floorY - 300, 40, 800, 0xff0000);
         this.physics.add.existing(speedingWall);
         speedingWall.body.allowGravity = false;
@@ -1412,7 +1536,7 @@ function create(data) {
         checkpoints.create(100, floorY - 60, 'flag_on');
 
         // Zone 1: The Input Buffer
-        wallSpeed = 360;
+        wallSpeed = 240; // Even slower thresher
         speedingWall = this.add.rectangle(-800, floorY - 300, 40, 800, 0xff0000);
         this.physics.add.existing(speedingWall);
         speedingWall.body.allowGravity = false;
@@ -1566,17 +1690,6 @@ function create(data) {
             this.physics.add.existing(finishLine, true);
             this.tweens.add({ targets: finishLine, alpha: 0.5, yoyo: true, repeat: -1, duration: 500 });
         }
-
-        // Global Colliders for Rage Elements
-        this.physics.add.overlap(player, enemies, () => {
-            if(!isRageActive) respawnPlayer();
-        });
-        this.physics.add.overlap(player, jumpPads, (p, pad) => {
-            p.setVelocityY(-1400);
-            this.tweens.add({ targets: pad, scaleY: 0.5, duration: 50, yoyo: true });
-            playBlip(1000, 0.1, 'square', 0.2);
-            addStylePoints(50, "POWER JUMP");
-        });
     } else if (currentLevel === 99) {
         // ENDLESS MODE INITIALIZATION
         checkpoint = { x: 100, y: floorY - 100 };
@@ -1584,7 +1697,7 @@ function create(data) {
         heatLevel = 1;
         endlessDistance = 0;
         lastChunkX = 1500;
-        voidSpeed = 280;
+        voidSpeed = 180; // Even slower endless void
 
         // The De-Res Wall (The Void)
         endlessVoidWall = this.add.rectangle(-800, floorY - 500, 100, 3000, 0xff0000);
@@ -1600,6 +1713,154 @@ function create(data) {
         spawnEndlessChunk(floorY);
         spawnEndlessChunk(floorY);
         spawnEndlessChunk(floorY);
+    }
+
+    // --- MULTIPLAYER RACE MODE (currentLevel === 100) ---
+    else if (currentLevel === 100) {
+        checkpoint = { x: 100, y: floorY - 100 };
+        
+        // Initialize PeerJS
+        showMultiplayerLoading(`Connecting to PeerJS...`);
+        peer = new Peer(isHost ? netRoom : undefined, {
+            debug: 2,
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+            }
+        });
+
+        peer.on('error', (err) => {
+            console.error('PeerJS Error:', err);
+            showMultiplayerLoading(`NETWORK ERROR: ${err.type}. Please try again.`);
+            setTimeout(() => quitToMenu(), 3000);
+        });
+
+        if (isHost) {
+            showMultiplayerLoading(`Hosting room: ${netRoom}. Waiting for opponent...`);
+            peer.on('connection', (conn) => {
+                peerConn = conn;
+                setupNetwork(conn);
+            });
+        } else {
+            showMultiplayerLoading(`Connecting to room: ${netRoom}...`);
+            peer.on('open', (id) => {
+                const conn = peer.connect(netRoom, { reliable: true });
+                peerConn = conn;
+                setupNetwork(conn);
+            });
+        }
+    }
+
+    function setupNetwork(conn) {
+        conn.on('open', () => {
+            hideMultiplayerLoading();
+            console.log('Connection opened with peer:', conn.peer);
+            
+            // Send initial player info
+            conn.send({ type: 'player_join', name: userName });
+
+            if (isHost) {
+                // Host proposes maps for voting
+                const raceMaps = [
+                    { id: 'track1', name: 'THE DASH', desc: 'A short, fast sprint.' },
+                    { id: 'track2', name: 'THE CLIMB', desc: 'Vertical challenges.' },
+                    { id: 'track3', name: 'THE GRIND', desc: 'Rail heavy course.' }
+                ];
+                conn.send({ type: 'start_voting', maps: raceMaps });
+                showMapVoting(raceMaps);
+                multiplayerState = 'voting';
+            }
+        });
+
+        conn.on('close', () => {
+            console.log('Connection closed with peer:', conn.peer);
+            if (multiplayerState !== 'finished') {
+                alert('Opponent disconnected. Returning to menu.');
+                quitToMenu();
+            }
+        });
+
+        conn.on('data', (data) => {
+            if (data.type === 'player_join') {
+                console.log(`${data.name} joined the game.`);
+                // Host sends map voting info to new player
+                if (isHost && multiplayerState === 'voting') {
+                    conn.send({ type: 'start_voting', maps: Object.keys(mapVotes).map(id => ({ id, name: id.replace('track', 'Track '), desc: '' })) });
+                }
+            } else if (data.type === 'player_state') {
+                remotePlayerState = data.state;
+                if (remotePlayerSprite) {
+                    remotePlayerSprite.setPosition(remotePlayerState.x, remotePlayerState.y);
+                    remotePlayerSprite.setFlipX(remotePlayerState.flipX);
+                    // Update remote player appearance based on state
+                    if (remotePlayerState.isSliding || remotePlayerState.isRolling) {
+                        remotePlayerSprite.setScale(1.5, 0.5);
+                        remotePlayerSprite.body.setSize(32, 24);
+                        remotePlayerSprite.body.setOffset(0, 24);
+                    } else if (remotePlayerState.isDiving || remotePlayerState.isAirDashing) {
+                        remotePlayerSprite.setScale(2.0, 0.3);
+                        remotePlayerSprite.body.setSize(32, 24);
+                        remotePlayerSprite.body.setOffset(0, 24);
+                    } else {
+                        remotePlayerSprite.setScale(1);
+                        remotePlayerSprite.body.setSize(32, 48);
+                        remotePlayerSprite.body.setOffset(0, 0);
+                    }
+                    if (remotePlayerState.isGrabbing) {
+                        remotePlayerSprite.setTexture('climbing_sprite');
+                    } else {
+                        remotePlayerSprite.setTexture('humanoid');
+                    }
+                }
+            } else if (data.type === 'start_voting') {
+                showMapVoting(data.maps);
+                multiplayerState = 'voting';
+            } else if (data.type === 'submit_vote') {
+                mapVotes[data.mapId] = (mapVotes[data.mapId] || 0) + 1;
+                updateVotingUI();
+                if (isHost) {
+                    // Host broadcasts updated votes
+                    peerConn.send({ type: 'sync_votes', votes: mapVotes });
+                    checkVotingResults();
+                }
+            } else if (data.type === 'sync_votes') {
+                mapVotes = data.votes;
+                updateVotingUI();
+            } else if (data.type === 'map_selected') {
+                selectedRaceMap = data.mapId;
+                hideMapVoting();
+                generateRaceTrack(selectedRaceMap);
+                multiplayerState = 'waiting_start';
+                raceStatusDisplay.innerText = 'WAITING FOR START...';
+                // Create remote player sprite once map is loaded
+                remotePlayerSprite = sceneRef.physics.add.sprite(checkpoint.x, checkpoint.y, 'humanoid');
+                remotePlayerSprite.setOrigin(0.5, 1);
+                remotePlayerSprite.setCollideWorldBounds(false);
+                remotePlayerSprite.setTint(0x00aaff); // Differentiate remote player
+                remotePlayerSprite.setDepth(95);
+                syncBody(remotePlayerSprite);
+            } else if (data.type === 'race_start') {
+                raceStartTime = performance.now();
+                multiplayerState = 'racing';
+                raceStatusDisplay.innerText = 'GO!';
+                startRaceTimer();
+            } else if (data.type === 'race_finish') {
+                raceFinishedPlayers[conn.peer] = data.time;
+                if (isHost) {
+                    // Host collects all finish times and determines winner
+                    checkRaceEnd();
+                }
+            } else if (data.type === 'race_results') {
+                raceFinishedPlayers = data.results;
+                showRaceResults();
+                multiplayerState = 'finished';
+            } else if (data.type === 'timer_sync') {
+                votingTimeRemaining = data.time;
+                document.getElementById('voting-timer').innerText = votingTimeRemaining;
+            }
+        });
     }
 
     // AMBIENT VISUALS
@@ -1671,10 +1932,30 @@ function create(data) {
     cdSpiral = document.getElementById('cdnum-spiral');
     cdGlide = document.getElementById('cdnum-glide');
 
+    // --- GHOST SYSTEM INIT ---
+    recordingData = [];
+    ghostData = [];
+    if (currentLevel > 0 && currentLevel !== 99) {
+        try {
+            ghostData = JSON.parse(localStorage.getItem(`vaultGhost_${currentLevel}`)) || [];
+        } catch(e) { ghostData = []; }
+        if (ghostData.length > 0) {
+            ghostSprite = this.add.sprite(ghostData[0].x, ghostData[0].y, 'humanoid');
+            ghostSprite.setAlpha(0); // Hidden unless in practice mode
+            ghostSprite.setTint(0x66ccff);
+            ghostSprite.setOrigin(0.5, 1);
+            ghostSprite.setDepth(90);
+        }
+    }
+
     player = this.physics.add.sprite(checkpoint.x, checkpoint.y, 'humanoid');
     player.setOrigin(0.5, 1);
     player.setCollideWorldBounds(false); 
     player.setDamping(true);
+    if (currentLevel === 100) {
+        player.setTint(0xff007f); // Local player color
+    }
+
     player.setDragX(0.01);
     syncBody(player);
     
@@ -1698,6 +1979,21 @@ function create(data) {
 
     this.cameras.main.startFollow(player, true, 0.1, 0.1);
     this.cameras.main.setZoom(1.1 * gameSettings.resScale);
+
+    // Global Colliders for Rage Elements (Moved to end of create to ensure player character exists)
+    if (currentLevel >= 101 && currentLevel <= 110) {
+        this.physics.add.overlap(player, enemies, () => {
+            if (gameSettings.practiceMode) return;
+            if(!isRageActive) respawnPlayer();
+        });
+        this.physics.add.overlap(player, jumpPads, (p, pad) => {
+            p.setVelocityY(-1600); // Increased jump pad height
+            this.tweens.add({ targets: pad, scaleY: 0.5, duration: 50, yoyo: true });
+            playBlip(1000, 0.1, 'square', 0.2);
+            addStylePoints(50, "POWER JUMP");
+        });
+    }
+
     this.cameras.main.setBounds(0, -3000, 1000000, height + 3000); // Massive bounds for endless
 
     speedLines = this.add.graphics();
@@ -1706,7 +2002,12 @@ function create(data) {
 
     // Colliders
     this.physics.add.collider(player, platforms, (p, plat) => {
-        if (p.body.wasTouching.none && p.body.touching.down) {
+        // Rage Mode Practice Checkpointing: No reset to start!
+        if (isRageMode && gameSettings.practiceMode && p.body.touching.down) {
+            checkpoint = { x: p.x, y: p.y };
+        }
+
+        if (p.body.wasTouching.none && (this.physics.world.gravity.y > 0 ? p.body.touching.down : p.body.touching.up)) {
             lastLandedAt = performance.now();
             hasAirDashed = false; // RESET AIR DASH
             landEmitter.emitParticleAt(p.x, p.y + 24, 12);
@@ -1759,6 +2060,7 @@ function create(data) {
     
     if (endlessSpikes) {
         this.physics.add.overlap(player, endlessSpikes, (p, spike) => {
+            if (gameSettings.practiceMode) return;
             if (currentLevel === 5 && spike.y < player.y) {
                 // Instant death if hitting ceiling spikes in Lvl 5
                 respawnPlayer();
@@ -1795,7 +2097,6 @@ function create(data) {
         });
     }
 
-    keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,CTRL,SPACE');
     keys = this.input.keyboard.addKeys('W,A,S,D,SHIFT,CTRL,SPACE,R');
 
     // Fade banner
@@ -1808,17 +2109,241 @@ function create(data) {
     });
 }
 
+// --- MULTIPLAYER RACE TRACK GENERATION ---
+function generateRaceTrack(mapId, difficulty = 'medium', seed = 123) {
+    const floorY = sceneRef.scale.height - 40;
+    platforms.clear(true, true);
+    rails = [];
+    finishLine = null;
+    checkpoints.clear(true, true);
+    const railG = sceneRef.add.graphics();
+    railG.lineStyle(6, 0x66ccff, 1);
+
+    const random = mulberry32(seed);
+    let curX = 400;
+    let curY = floorY;
+
+    // Starting platform
+    platforms.add(sceneRef.add.rectangle(curX, curY, 800, 80, 0x1a1a1a));
+    curX += 400;
+
+    let segs = difficulty === 'easy' ? 6 : (difficulty === 'hard' ? 15 : 10);
+    const colors = [0x1a1a1a, 0x222222, 0x333333];
+
+    for(let i=0; i<segs; i++) {
+        const type = Math.floor(random() * 4);
+        const col = colors[Math.floor(random() * colors.length)];
+        
+        if(type === 0) { // Flat
+            const w = 400 + random() * 600;
+            curX += w/2 + 50;
+            platforms.add(sceneRef.add.rectangle(curX, curY, w, 80, col));
+            curX += w/2;
+        } else if(type === 1) { // Gap
+            const gap = 150 + random() * (difficulty === 'hard' ? 400 : 250);
+            const w = 300 + random() * 400;
+            const dy = (random() - 0.5) * (difficulty === 'easy' ? 100 : 300);
+            curX += gap + w/2;
+            curY = Phaser.Math.Clamp(curY + dy, 200, floorY);
+            platforms.add(sceneRef.add.rectangle(curX, curY, w, 80, col));
+            curX += w/2;
+        } else if(type === 2) { // Chimney
+            curX += 200;
+            const h = 600 + random() * 400;
+            platforms.add(sceneRef.add.rectangle(curX, curY - h/2, 40, h, 0x222222));
+            platforms.add(sceneRef.add.rectangle(curX + 120, curY - h/2 - 100, 40, h + 200, 0x222222));
+            curX += 120; curY -= (h - 100);
+            platforms.add(sceneRef.add.rectangle(curX + 200, curY, 400, 40, 0x1a1a1a));
+            curX += 400;
+        } else if(type === 3) { // Rail
+            const l = 600 + random() * 600;
+            const r = { x1: curX + 50, y1: curY - 100, x2: curX + l, y2: Phaser.Math.Clamp(curY + (random()-0.5)*400 - 100, 100, floorY-100) };
+            rails.push(r);
+            railG.strokeLineShape(new Phaser.Geom.Line(r.x1, r.y1, r.x2, r.y2));
+            curX += l + 100; curY = r.y2 + 100;
+            platforms.add(sceneRef.add.rectangle(curX + 200, curY, 400, 80, 0x1a1a1a));
+            curX += 400;
+        }
+    }
+
+    finishLine = sceneRef.add.rectangle(curX + 300, curY - 200, 20, 600, 0xffffff);
+    if (finishLine) {
+        sceneRef.physics.add.existing(finishLine, true);
+        sceneRef.physics.add.overlap(player, finishLine, () => {
+            if (multiplayerState === 'racing' && !raceFinishedPlayers[peer.id]) {
+                raceFinishTime = performance.now();
+                raceFinishedPlayers[peer.id] = (raceFinishTime - raceStartTime) / 1000;
+                raceStatusDisplay.innerText = 'FINISHED!';
+                peerConn.send({ type: 'race_finish', time: raceFinishedPlayers[peer.id] });
+                if (isHost) checkRaceEnd();
+            }
+        });
+    }
+    player.setPosition(checkpoint.x, checkpoint.y);
+    player.setVelocity(0,0);
+}
+
+function startVotingTimer() {
+    votingTimeRemaining = 30;
+    document.getElementById('voting-timer').innerText = votingTimeRemaining;
+    clearInterval(votingTimerInterval);
+    votingTimerInterval = setInterval(() => {
+        votingTimeRemaining--;
+        document.getElementById('voting-timer').innerText = votingTimeRemaining;
+        if (isHost && peerConn && peerConn.open) {
+            peerConn.send({ type: 'timer_sync', time: votingTimeRemaining });
+        }
+        if (votingTimeRemaining <= 0) {
+            clearInterval(votingTimerInterval);
+            if (isHost) {
+                checkVotingResults();
+            }
+        }
+    }, 1000);
+}
+
+function submitMapVote(mapId) {
+    // Client sends vote to host
+    if (!isHost && peerConn && peerConn.open) {
+        peerConn.send({ type: 'submit_vote', mapId: mapId });
+    }
+    // Local player also "votes" for visual feedback
+    mapVotes[mapId] = (mapVotes[mapId] || 0) + 1;
+    updateVotingUI();
+}
+
+function checkVotingResults() {
+    if (!isHost) return;
+    let maxVotes = 0;
+    let winningMap = null;
+    for (const mapId in mapVotes) {
+        if (mapVotes[mapId] > maxVotes) {
+            maxVotes = mapVotes[mapId];
+            winningMap = mapId;
+        }
+    }
+    if (!winningMap) {
+        // If no votes, pick a random map
+        const availableMaps = ['track1', 'track2', 'track3'];
+        winningMap = availableMaps[Math.floor(Math.random() * availableMaps.length)];
+    }
+    const seed = Math.floor(Math.random() * 1000000);
+    selectedRaceMap = winningMap;
+    peerConn.send({ type: 'map_selected', mapId: selectedRaceMap, difficulty: raceDifficulty, seed: seed });
+    hideMapVoting();
+    generateRaceTrack(selectedRaceMap, raceDifficulty, seed);
+    multiplayerState = 'waiting_start';
+    raceStatusDisplay.innerText = 'WAITING FOR START...';
+    // Create remote player sprite for host
+    remotePlayerSprite = sceneRef.physics.add.sprite(checkpoint.x, checkpoint.y, 'humanoid');
+    remotePlayerSprite.setOrigin(0.5, 1);
+    remotePlayerSprite.setCollideWorldBounds(false);
+    remotePlayerSprite.setTint(0x00aaff); // Differentiate remote player
+    remotePlayerSprite.setDepth(95);
+    syncBody(remotePlayerSprite);
+
+    // Host initiates race start after a short delay
+    sceneRef.time.delayedCall(3000, () => {
+        peerConn.send({ type: 'race_start' });
+        raceStartTime = performance.now();
+        multiplayerState = 'racing';
+        raceStatusDisplay.innerText = 'GO!';
+        startRaceTimer();
+    });
+}
+
+function startRaceTimer() {
+    clearInterval(raceTimerInterval);
+    raceTimerInterval = setInterval(() => {
+        if (multiplayerState === 'racing') {
+            const elapsed = (performance.now() - raceStartTime) / 1000;
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = Math.floor(elapsed % 60);
+            raceTimerDisplay.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+    }, 1000);
+}
+
+function checkRaceEnd() {
+    if (!isHost) return;
+    // Assuming 2 players for now
+    if (Object.keys(raceFinishedPlayers).length === 2) {
+        // Both players finished, determine winner and send results
+        const results = Object.entries(raceFinishedPlayers).sort(([, timeA], [, timeB]) => timeA - timeB);
+        peerConn.send({ type: 'race_results', results: raceFinishedPlayers });
+        showRaceResults();
+        multiplayerState = 'finished';
+    }
+}
+
+function showRaceResults() {
+    clearInterval(raceTimerInterval);
+    document.getElementById('ui-layer').style.display = 'none';
+    document.getElementById('race-hud').style.display = 'none';
+    document.getElementById('race-results-screen').style.display = 'flex';
+    const leaderboard = document.getElementById('leaderboard');
+    leaderboard.innerHTML = '';
+
+    const sortedResults = Object.entries(raceFinishedPlayers).sort(([, timeA], [, timeB]) => timeA - timeB);
+    sortedResults.forEach(([peerId, time], index) => {
+        const playerDisplayName = (peerId === peer.id) ? `${userName} (YOU)` : `Opponent`; // Simple naming for 2 players
+        const item = document.createElement('div');
+        item.style.marginBottom = '10px';
+        item.style.color = (peerId === peer.id) ? '#00ff88' : '#fff';
+        item.innerHTML = `${index + 1}. ${playerDisplayName}: ${time.toFixed(2)}s`;
+        leaderboard.appendChild(item);
+    });
+}
+
 function update() {
     if (currentLevel === 0 || isPaused) return; // Menu state or Paused
     if (levelFinished) return;
     
     let dt = this.game.loop.delta / 1000;
 
+    // --- GHOST PLAYBACK & RECORDING ---
+    const elapsed = performance.now() - startTime;
+    if (ghostSprite && ghostData.length > 0) {
+        ghostSprite.setAlpha(gameSettings.practiceMode ? 0.4 : 0);
+        if (gameSettings.practiceMode) {
+            let frame = ghostData.find(f => f.t >= elapsed);
+            if (frame) {
+                ghostSprite.setPosition(frame.x, frame.y);
+                ghostSprite.setFlipX(frame.flipX);
+                ghostSprite.setTexture(frame.climb ? 'climbing_sprite' : 'humanoid');
+            }
+        }
+    }
+
+    if (!gameSettings.practiceMode && !levelFinished && currentLevel > 0 && currentLevel !== 99 && (this.game.loop.frame % 3 === 0)) {
+        recordingData.push({ t: elapsed, x: player.x, y: player.y, flipX: player.flipX, climb: player.texture.key === 'climbing_sprite' });
+    }
+
+    // --- MULTIPLAYER STATE SYNC (60 FPS SYNC) ---
+    if (currentLevel === 100 && peerConn && peerConn.open && multiplayerState === 'racing') {
+        // Send local player state every frame for smooth sync
+        peerConn.send({
+            type: 'player_state',
+            state: {
+                x: player.x,
+                y: player.y,
+                flipX: player.flipX,
+                isSliding: isSliding,
+                isGrabbing: isGrabbing,
+                isRolling: isRolling,
+                isDiving: isDiving,
+                isAirDashing: isAirDashing
+            }
+        });
+    }
+
+    if (gameSettings.practiceMode) stamina = 100;
+
     // --- RAGE METER UPDATE ---
     if (!isRageActive) {
         const vel = Math.abs(player.body.velocity.x) + Math.abs(player.body.velocity.y);
-        if (vel > 600) rageMeter = Math.min(100, rageMeter + dt * 5);
-        
+        if (vel > 400) rageMeter = Math.min(100, rageMeter + dt * 10); // Fills faster and easier
+
         if (Phaser.Input.Keyboard.JustDown(keys.R) && rageMeter >= 100) {
             isRageActive = true;
             rageMeter = 100;
@@ -1857,7 +2382,7 @@ function update() {
     }
 
     // --- Dynamic Mobile UI updates ---
-    const isGrounded = player.body.touching.down;
+    const isGrounded = this.physics.world.gravity.y > 0 ? player.body.touching.down : player.body.touching.up;
     const btnSlideUI = document.getElementById('btn-slide');
     const btnSprintUI = document.getElementById('btn-sprint');
     
@@ -1872,6 +2397,11 @@ function update() {
     // Reset if falling out of world
     if (player.y > this.scale.height + 400) {
         if (currentLevel === 99) {
+            if (gameSettings.practiceMode) {
+                player.setPosition(checkpoint.x, checkpoint.y);
+                player.setVelocity(0, 0);
+                return;
+            }
             levelFinished = true;
             endTime = performance.now();
             showRating();
@@ -1928,12 +2458,13 @@ function update() {
 
         // Void Stalker Logic
         endlessVoidWall.x += voidSpeed * dt;
-        if (heatLevel === 1) voidSpeed = 280;
-        else if (heatLevel === 2) voidSpeed = 400;
-        else if (heatLevel === 3) voidSpeed = 500;
-        else if (heatLevel === 4) voidSpeed = 650;
+        if (heatLevel === 1) voidSpeed = 180;
+        else if (heatLevel === 2) voidSpeed = 280;
+        else if (heatLevel === 3) voidSpeed = 380;
+        else if (heatLevel === 4) voidSpeed = 500;
 
         if (player.x < endlessVoidWall.x) {
+            if (gameSettings.practiceMode) return;
             levelFinished = true;
             endTime = performance.now();
             showRating();
@@ -1977,16 +2508,17 @@ function update() {
         if (wallSpeedTrigger && wallSpeedTrigger.active) {
             this.physics.overlap(player, wallSpeedTrigger, () => {
                 wallSpeedTrigger.active = false;
-                wallSpeed = 350;
+                wallSpeed = 220;
                 showTutorial("WALL VELOCITY INCREASED");
             });
         }
 
-        if (!isHidden && player.x < speedingWall.x + 20 && player.x > speedingWall.x - 400) {
+        if (!isHidden && player.x < speedingWall.x && player.x > speedingWall.x - 400) { // Reduced catch zone
+            if (gameSettings.practiceMode) return;
             player.setPosition(checkpoint.x, checkpoint.y);
             player.setVelocity(0, 0);
             speedingWall.x = checkpoint.x - 1000;
-            wallSpeed = currentLevel === 5 ? 360 : 250;
+            wallSpeed = currentLevel === 5 ? 240 : 160;
             if (wallSpeedTrigger) wallSpeedTrigger.active = true;
             stamina = 100;
             playRollSfx();
@@ -2060,10 +2592,10 @@ function update() {
 
     // --- DOUBLE-TAP AIR DASH MECHANIC ---
     if (Phaser.Input.Keyboard.JustDown(keys.A) || mobileJustDown.A) {
-        if (performance.now() - lastTapA < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
+        if (performance.now() - lastTapA < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 2) {
             hasAirDashed = true;
             isAirDashing = true;
-            stamina -= 10;
+            stamina -= 2; // Cheaper dash
             player.body.allowGravity = false;
             player.setVelocityY(0);
             player.setVelocityX(-1200);
@@ -2081,10 +2613,10 @@ function update() {
     }
     
     if (Phaser.Input.Keyboard.JustDown(keys.D) || mobileJustDown.D) {
-        if (performance.now() - lastTapD < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 10) {
+        if (performance.now() - lastTapD < 300 && !isGrounded && !hasAirDashed && !isGrabbing && stamina >= 2) {
             hasAirDashed = true;
             isAirDashing = true;
-            stamina -= 10;
+            stamina -= 2; // Cheaper dash
             player.body.allowGravity = false;
             player.setVelocityY(0);
             player.setVelocityX(1200);
@@ -2103,11 +2635,11 @@ function update() {
 
 
     // --- MOVEMENT ---
-    let baseMovementSpeed = 350;
+    let baseMovementSpeed = 450; // Increased global move speed
     if (currentLevel === 99) {
-        if (heatLevel === 2) baseMovementSpeed = 500;
-        if (heatLevel === 3) baseMovementSpeed = 600;
-        if (heatLevel === 4) baseMovementSpeed = 700;
+        if (heatLevel === 2) baseMovementSpeed = 600;
+        if (heatLevel === 3) baseMovementSpeed = 750;
+        if (heatLevel === 4) baseMovementSpeed = 900;
         // Gravity increase on Overdrive
         this.physics.world.gravity.y = heatLevel === 4 ? 1980 : 1800;
     }
@@ -2133,14 +2665,14 @@ function update() {
 
     if (isSprintIntent && stamina > 0 && !isSliding) {
         isSprinting = true;
-        targetSpeed = Math.max(650, targetSpeed + 300);
-        stamina = Math.max(0, stamina - 0.7);
+        targetSpeed = Math.max(800, targetSpeed + 400); // Increased sprint speed
+        stamina = Math.max(0, stamina - 0.2); // Lower sprint cost
     } else {
         isSprinting = false;
-        let rechargeRate = (currentLevel === 99 && heatLevel >= 3) ? 0.32 : 0.4;
+        let rechargeRate = (currentLevel === 99 && heatLevel >= 3) ? 0.8 : 1.0; // Faster recharge
         stamina = Math.min(100, stamina + rechargeRate);
     }
-    
+
     // Automatically break sprint toggle if stamina depletes
     if (stamina <= 0) sprintToggled = false;
 
@@ -2288,7 +2820,7 @@ function update() {
         } else if (!isPushingAway && (keys.SPACE.isDown || mobileKeys.SPACE) && stamina > 0) {
             // CLIMB UPWARD
             player.setVelocityY(-250);
-            stamina = Math.max(0, stamina - 0.3);
+            stamina = Math.max(0, stamina - 0.05); // Even lower climb cost
             if(player.texture.key !== 'climbing_sprite') player.setTexture('climbing_sprite');
         } else {
             // SLIDE DOWN SLOWLY
@@ -2301,7 +2833,7 @@ function update() {
     if (Phaser.Input.Keyboard.JustDown(keys.SPACE) || mobileJustDown.SPACE) {
         if (isGrounded) {
             // Ground Jump
-            player.setVelocityY(-800);
+            player.setVelocityY(-950); // Increased jump height
             
             // Removed syncBody to protect hitbox integrity
             this.tweens.add({ targets: player, scaleX: 0.4, scaleY: 1.8, duration: 140, yoyo: true, ease: 'Back.easeOut' });
@@ -2313,7 +2845,7 @@ function update() {
                 const dir = hitLeft ? 1 : -1;
                 isGrabbing = false; player.body.allowGravity = true;
                 if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
-                player.setVelocityY(-950);
+                player.setVelocityY(-1100); // Increased spiral jump height
                 player.setVelocityX(dir * 800);
                 isSpinning = true;
                 this.tweens.add({ targets: player, angle: dir * 720, duration: 600, onComplete: () => { player.setAngle(0); isSpinning = false; } });
@@ -2323,7 +2855,7 @@ function update() {
                 // Standard Wall Hop
                 isGrabbing = false; player.body.allowGravity = true;
                 if(player.texture.key === 'climbing_sprite') player.setTexture('humanoid');
-                player.setVelocityY(-650);
+                player.setVelocityY(-750); // Increased wall hop height
                 player.setVelocityX(hitLeft ? 400 : -400);
                 addFlow(0.2);
             }
@@ -2331,9 +2863,9 @@ function update() {
     }
 
     // SLIDE / DIVE
-    if ((Phaser.Input.Keyboard.JustDown(keys.CTRL) || mobileJustDown.CTRL) && !isSliding && !isDiving && !isRolling && stamina > 10) {
+    if ((Phaser.Input.Keyboard.JustDown(keys.CTRL) || mobileJustDown.CTRL) && !isSliding && !isDiving && !isRolling && stamina > 2) {
         if (isGrounded) {
-            isSliding = true; stamina -= 20;
+            isSliding = true; stamina -= 5; // Cheaper slide
             const dir = player.flipX ? -1 : 1;
             player.setVelocityX(dir * 1100);
             
@@ -2358,7 +2890,7 @@ function update() {
             playSpeedSfx(); addStylePoints(25, "SLIDE");
             addFlow(0.5);
         } else {
-            isDiving = true; stamina = Math.max(0, stamina - 10);
+            isDiving = true; stamina = Math.max(0, stamina - 2); // Cheaper dive
             const dir = player.flipX ? -1 : 1;
             player.setVelocityX(dir * 600); 
             player.setVelocityY(1500); // Accelerated Mega-Drop dive
@@ -2456,10 +2988,17 @@ function showRating() {
         document.getElementById('stat-flow').innerText = `MAX FLOW: ${flowPercent}%`;
         
         let starsEarned = [false, false, false];
+        let bestTime = parseFloat(localStorage.getItem(`vaultBestTime_${currentLevel}`)) || Infinity;
 
         if (totalTime < 30) starsEarned[0] = true;
         if (stylePoints > 1500) starsEarned[1] = true; 
         if (flowPercent > 80) starsEarned[2] = true;
+
+        // Save Ghost if new best time (Normal mode only)
+        if (!gameSettings.practiceMode && parseFloat(totalTime) < bestTime) {
+            localStorage.setItem(`vaultBestTime_${currentLevel}`, totalTime);
+            localStorage.setItem(`vaultGhost_${currentLevel}`, JSON.stringify(recordingData));
+        }
         
         // RATING STAR POP ANIMATION
         [1, 2, 3].forEach(i => {
